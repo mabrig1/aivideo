@@ -27,6 +27,12 @@ jobs:
       - name: Typecheck
         run: npx tsc --noEmit
 
+      - name: Kaggle bridge contract tests
+        run: npm test
+
+      - name: Python notebook uploader syntax
+        run: python -m py_compile scripts/kaggle_upload.py
+
       - name: Next.js build
         run: npm run build
 
