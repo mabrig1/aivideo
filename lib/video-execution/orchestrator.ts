@@ -2,6 +2,7 @@ import {
   withVideoCircuitBreaker,
   videoCircuitBreakers,
 } from '../video-router/circuit-breaker';
+import { verifyExecutionApproval } from './approval';
 import { safeProviderError } from './http';
 import { executionAdapter } from './registry';
 import type {
@@ -46,20 +47,14 @@ function normalize(input: VideoExecutionInput): VideoExecutionInput {
     throw new Error('At least one executable candidate provider is required');
   }
 
-  const approvedPaidProviderIds = (
-    input.approvedPaidProviderIds || []
-  ).filter((providerId): providerId is ExecutionProviderId =>
-    supported.has(providerId),
-  );
-
   return {
     ...input,
     missionId: input.missionId.trim().slice(0, 120),
     prompt: input.prompt.trim().slice(0, 20_000),
     durationSeconds,
     candidateProviderIds: [...new Set(candidates)],
-    approvedPaidProviderIds: [...new Set(approvedPaidProviderIds)],
     referenceImageUrls: input.referenceImageUrls?.slice(0, 8),
+    approvalToken: input.approvalToken?.trim().slice(0, 8_000),
     maxRunwayCredits:
       typeof input.maxRunwayCredits === 'number' &&
       Number.isFinite(input.maxRunwayCredits)
@@ -71,10 +66,28 @@ function normalize(input: VideoExecutionInput): VideoExecutionInput {
 export async function executeWithFallback(
   rawInput: VideoExecutionInput,
 ): Promise<ExecutionResult> {
-  const input = normalize(rawInput);
+  let input = normalize(rawInput);
   const attempts: ExecutionResult['attempts'] = [];
   const warnings: string[] = [];
-  const approved = new Set(input.approvedPaidProviderIds || []);
+
+  const approval = await verifyExecutionApproval(input.approvalToken, input);
+  const approved = new Set(approval?.providerIds || []);
+
+  if (
+    typeof approval?.maxRunwayCredits === 'number' &&
+    typeof input.maxRunwayCredits !== 'number'
+  ) {
+    input = {
+      ...input,
+      maxRunwayCredits: approval.maxRunwayCredits,
+    };
+  }
+
+  if (input.approvedPaidProviderIds?.length) {
+    warnings.push(
+      'Legacy approvedPaidProviderIds metadata was ignored; signed operator approval is authoritative.',
+    );
+  }
 
   for (const providerId of input.candidateProviderIds) {
     const adapter = executionAdapter(providerId);
@@ -105,7 +118,7 @@ export async function executeWithFallback(
         stage: 'preflight',
         ok: false,
         detail:
-          'Metered provider was not explicitly approved for this execution.',
+          'Metered provider requires a valid signed operator approval for this mission.',
       });
       continue;
     }
@@ -152,7 +165,7 @@ export async function executeWithFallback(
       }
       if (providerId === 'gemini-veo' && preflight.estimatedCostUsd) {
         warnings.push(
-          `Gemini/Veo preflight estimated ${preflight.estimatedCostUsd.toFixed(2)} before submission.`,
+          `Gemini/Veo preflight estimated $${preflight.estimatedCostUsd.toFixed(2)} before submission.`,
         );
       }
 

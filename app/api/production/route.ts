@@ -31,6 +31,18 @@ function routingFromBody(value: unknown): ProductionRouting | undefined {
     warnings: Array.isArray(routing.warnings)
       ? routing.warnings.map((warning) => String(warning).slice(0, 300)).slice(0, 10)
       : [],
+    requestedAspectRatio:
+      typeof routing.requestedAspectRatio === 'string'
+        ? routing.requestedAspectRatio.slice(0, 20)
+        : undefined,
+    generationAspectRatio:
+      typeof routing.generationAspectRatio === 'string'
+        ? routing.generationAspectRatio.slice(0, 20)
+        : undefined,
+    finishingStrategy:
+      typeof routing.finishingStrategy === 'string'
+        ? routing.finishingStrategy.slice(0, 500)
+        : undefined,
   };
 }
 

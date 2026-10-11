@@ -16,6 +16,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Python worker syntax
+        run: python3 -m py_compile worker/worker.py worker/wan_server.py
+
       - name: Use Node.js
         uses: actions/setup-node@v4
         with:

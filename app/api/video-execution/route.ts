@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { persistProviderOutputs } from '../../../lib/video-execution/artifacts';
 import {
   executeWithFallback,
   getExecutionStatus,
@@ -7,6 +8,12 @@ import type {
   ExecutionProviderId,
   VideoExecutionInput,
 } from '../../../lib/video-execution/types';
+
+const PROVIDERS = new Set<ExecutionProviderId>([
+  'local-wan',
+  'gemini-veo',
+  'runway',
+]);
 
 function enabled() {
   const value = process.env.VIDEO_EXECUTION_ENABLED?.trim().toLowerCase();
@@ -30,6 +37,13 @@ function deny() {
     },
     { status: 403 },
   );
+}
+
+function providerFrom(value: unknown): ExecutionProviderId | null {
+  return typeof value === 'string' &&
+    PROVIDERS.has(value as ExecutionProviderId)
+    ? (value as ExecutionProviderId)
+    : null;
 }
 
 export async function POST(req: NextRequest) {
@@ -58,12 +72,60 @@ export async function POST(req: NextRequest) {
   }
 }
 
+export async function PUT(req: NextRequest) {
+  if (!enabled() || !authorized(req)) return deny();
+
+  try {
+    const body = (await req.json()) as {
+      missionId?: string;
+      providerId?: string;
+      providerJobId?: string;
+    };
+    const providerId = providerFrom(body.providerId);
+    const missionId = body.missionId?.trim();
+    const providerJobId = body.providerJobId?.trim();
+
+    if (!missionId || !providerId || !providerJobId) {
+      return NextResponse.json(
+        { error: 'missionId, providerId and providerJobId are required' },
+        { status: 400 },
+      );
+    }
+
+    const status = await getExecutionStatus(providerId, providerJobId);
+    if (status.status !== 'succeeded') {
+      return NextResponse.json(
+        {
+          error: 'Provider job is not ready for persistence.',
+          providerStatus: status.status,
+        },
+        { status: 409 },
+      );
+    }
+
+    const persisted = await persistProviderOutputs(missionId, status);
+    return NextResponse.json(persisted, {
+      status: persisted.artifacts.length ? 200 : 502,
+    });
+  } catch (error) {
+    return NextResponse.json(
+      {
+        error:
+          error instanceof Error
+            ? error.message
+            : 'Artifact persistence failed',
+      },
+      { status: 502 },
+    );
+  }
+}
+
 export async function GET(req: NextRequest) {
   if (!enabled() || !authorized(req)) return deny();
 
-  const providerId = req.nextUrl.searchParams.get(
-    'providerId',
-  ) as ExecutionProviderId | null;
+  const providerId = providerFrom(
+    req.nextUrl.searchParams.get('providerId'),
+  );
   const providerJobId = req.nextUrl.searchParams.get('providerJobId');
 
   if (!providerId || !providerJobId) {
