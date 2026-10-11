@@ -46,6 +46,8 @@ class RenderJob(BaseModel):
     audio_url: str = ''
     reference_urls: list[str] = Field(default_factory=list, max_length=8)
     brief: str = Field(min_length=1, max_length=4000)
+    engine: Literal['wan'] = 'wan'
+    duration_seconds: float = Field(default=5, gt=0, le=8)
     aspect_ratio: Literal['16:9', '9:16', '1:1'] = '16:9'
 
 
@@ -65,10 +67,10 @@ def generation_ready() -> bool:
 
 def dimensions(aspect_ratio: str) -> tuple[int, int]:
     if aspect_ratio == '9:16':
-        return 480, 832
+        return 432, 768
     if aspect_ratio == '1:1':
         return 512, 512
-    return 832, 480
+    return 768, 432
 
 
 def get_pipeline() -> WanPipeline:
@@ -108,6 +110,8 @@ def generate(job_id: str, request: RenderJob):
     try:
         pipe = get_pipeline()
         width, height = dimensions(request.aspect_ratio)
+        fps = max(8, min(DEFAULT_FPS, 30))
+        frame_count = min(129, max(17, round(request.duration_seconds * fps / 4) * 4 + 1))
         seed = DEFAULT_SEED
         generator = torch.Generator(device='cpu').manual_seed(seed)
         filename = f'{job_id}.mp4'
@@ -118,7 +122,7 @@ def generate(job_id: str, request: RenderJob):
                 prompt=request.brief,
                 height=height,
                 width=width,
-                num_frames=max(17, min(DEFAULT_FRAMES, 129)),
+                num_frames=frame_count,
                 num_inference_steps=max(4, min(DEFAULT_STEPS, 80)),
                 guidance_scale=max(1.0, min(DEFAULT_GUIDANCE, 20.0)),
                 generator=generator,
@@ -128,7 +132,7 @@ def generate(job_id: str, request: RenderJob):
             export_to_video(
                 frames,
                 str(output_path),
-                fps=max(8, min(DEFAULT_FPS, 30)),
+                fps=fps,
             )
 
         if not output_path.is_file() or output_path.stat().st_size == 0:
@@ -142,8 +146,8 @@ def generate(job_id: str, request: RenderJob):
                 'model': MODEL_ID,
                 'width': width,
                 'height': height,
-                'numFrames': max(17, min(DEFAULT_FRAMES, 129)),
-                'fps': max(8, min(DEFAULT_FPS, 30)),
+                'numFrames': frame_count,
+                'fps': fps,
                 'seed': seed,
             },
         )
@@ -200,6 +204,7 @@ def health():
         'cudaAvailable': torch.cuda.is_available(),
         'modelLoaded': pipeline is not None,
         'generationReady': generation_ready(),
+        'generationEngines': ['wan'] if generation_ready() else [],
         'detail': (
             'Wan worker is ready.'
             if generation_ready()

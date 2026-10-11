@@ -34,6 +34,7 @@ function normalize(input: VideoExecutionInput): VideoExecutionInput {
 
   const supported = new Set<ExecutionProviderId>([
     'local-wan',
+    'local-musetalk',
     'gemini-veo',
     'runway',
   ]);

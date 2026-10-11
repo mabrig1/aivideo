@@ -7,7 +7,7 @@ import type {
   VideoExecutionInput,
 } from '../types';
 
-type WorkerHealth = { ok?: boolean; generationReady?: boolean; detail?: string };
+type WorkerHealth = { ok?: boolean; generationReady?: boolean; generationEngines?: string[]; detail?: string };
 type WorkerSubmit = { accepted?: boolean; jobId?: string; status?: string; note?: string };
 type WorkerStatus = { status?: string; outputUrls?: string[]; error?: string };
 
@@ -41,11 +41,11 @@ export const museTalkAdapter: VideoExecutionAdapter = {
       10_000,
     );
     return {
-      ok: Boolean(health.ok && health.generationReady),
+      ok: Boolean(health.ok && health.generationReady && health.generationEngines?.includes('musetalk')),
       providerId: 'local-musetalk',
-      detail: health.ok && health.generationReady
+      detail: health.ok && health.generationReady && health.generationEngines?.includes('musetalk')
         ? 'MuseTalk worker path is reachable and generation-ready.'
-        : health.detail || 'GPU worker is not generation-ready.',
+        : health.detail || 'Worker does not report a configured MuseTalk engine.',
       model: 'MuseTalk',
     };
   },
@@ -59,6 +59,7 @@ export const museTalkAdapter: VideoExecutionAdapter = {
         body: JSON.stringify({
           project_id: input.missionId,
           engine: 'musetalk',
+          duration_seconds: input.durationSeconds,
           audio_url: input.audioUrl || '',
           source_image_url: input.sourceImageUrl || '',
           source_video_url: input.sourceVideoUrl || '',

@@ -11,6 +11,7 @@ import type {
 
 const PROVIDERS = new Set<ExecutionProviderId>([
   'local-wan',
+  'local-musetalk',
   'gemini-veo',
   'runway',
 ]);

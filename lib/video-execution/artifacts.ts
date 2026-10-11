@@ -115,7 +115,7 @@ function sourceAllowed(providerId: ExecutionProviderId, url: URL) {
     return hostname === 'runwayml.com' || hostname.endsWith('.runwayml.com');
   }
 
-  if (providerId === 'local-wan') {
+  if (providerId === 'local-wan' || providerId === 'local-musetalk') {
     const configuredWorker = process.env.GPU_WORKER_URL?.trim();
     if (!configuredWorker) return false;
     try {
@@ -131,12 +131,12 @@ function sourceAllowed(providerId: ExecutionProviderId, url: URL) {
 function providerHeaders(providerId: ExecutionProviderId, url: URL) {
   const headers = new Headers();
 
-  if (providerId === 'gemini-veo') {
+  if (providerId === 'gemini-veo' && url.hostname === 'generativelanguage.googleapis.com') {
     const key = process.env.GEMINI_API_KEY?.trim();
     if (key) headers.set('x-goog-api-key', key);
   }
 
-  if (providerId === 'local-wan') {
+  if (providerId === 'local-wan' || providerId === 'local-musetalk') {
     const workerUrl = process.env.GPU_WORKER_URL?.trim();
     const token = process.env.GPU_WORKER_TOKEN?.trim();
     if (workerUrl && token) {

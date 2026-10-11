@@ -1,0 +1,60 @@
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    volumes:
+      - mongo-data:/data/db
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      MONGODB_URI: mongodb://mongo:27017/mabrigverse
+      REDIS_URL: redis://redis:6379
+      LOCAL_MEDIA_ROOT: /data/media
+      NEXT_PUBLIC_APP_URL: http://localhost:3000
+      STORAGE_DRIVER: local
+      LOCAL_RENDER_ENABLED: "true"
+      RENDER_TOKEN: ${RENDER_TOKEN:?Set a random token of at least 32 characters}
+    ports:
+      - "3000:3000"
+    volumes:
+      - media-data:/data/media
+    depends_on:
+      - mongo
+      - redis
+
+  worker:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile.render
+    restart: unless-stopped
+    environment:
+      MONGODB_URI: mongodb://mongo:27017/mabrigverse
+      REDIS_URL: redis://redis:6379
+      LOCAL_MEDIA_ROOT: /data/media
+      STORAGE_DRIVER: local
+      LOCAL_RENDER_ENABLED: "true"
+      RENDER_TOKEN: ${RENDER_TOKEN:?Set a random token of at least 32 characters}
+      GPU_WORKER_TOKEN: local-dev-worker
+    ports:
+      - "8080:8080"
+    volumes:
+      - media-data:/data/media
+    depends_on:
+      - mongo
+      - redis
+
+volumes:
+  mongo-data:
+  redis-data:
+  media-data:

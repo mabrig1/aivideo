@@ -17,7 +17,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Python worker syntax
-        run: python3 -m py_compile worker/worker.py worker/wan_server.py
+        run: python3 -m py_compile worker/worker.py worker/wan_server.py worker/ffmpeg_worker.py
 
       - name: Use Node.js
         uses: actions/setup-node@v4
@@ -26,6 +26,9 @@ jobs:
 
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
+
+      - name: Lint
+        run: npm run lint
 
       - name: Typecheck
         run: npx tsc --noEmit

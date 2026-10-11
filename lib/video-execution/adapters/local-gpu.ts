@@ -96,6 +96,7 @@ export const localGpuAdapter: VideoExecutionAdapter = {
           brief: input.prompt,
           aspect_ratio: input.aspectRatio,
           engine: 'wan',
+          duration_seconds: input.durationSeconds,
           source_image_url: input.sourceImageUrl || '',
           source_video_url: input.sourceVideoUrl || '',
         }),
