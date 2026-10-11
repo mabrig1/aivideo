@@ -14,7 +14,7 @@
 
 ## One-time configuration
 
-1. Create a private Cloudflare R2 bucket (or reuse your dedicated, access-controlled media bucket). Set `R2_ENDPOINT` to the `https://<account>.r2.cloudflarestorage.com` S3 endpoint; set `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, and `R2_BUCKET` in **Vercel → aivideo → Settings → Environment Variables**. These are server-only. Grant credentials only the required bucket permissions.
+1. Create a private Cloudflare R2 bucket (or reuse your dedicated, access-controlled media bucket). Set `R2_ENDPOINT` to the `https://<account>.r2.cloudflarestorage.com` S3 endpoint; set `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, and `R2_BUCKET` in **Vercel → aivideo → Settings → Environment Variables**. These are server-only. Grant credentials only the required bucket permissions: list, read, write and delete (delete removes a rejected upload). Keep public access disabled.
 2. Generate a **new random secret, at least 32 characters**; for example, locally run `python -c "import secrets; print(secrets.token_urlsafe(48))"`. Set it in the same Vercel project as `KAGGLE_BRIDGE_TOKEN` for the relevant environments. Never use `NEXT_PUBLIC_` for this token. Existing unrelated `VIDEO_EXECUTION_TOKEN` is separate.
 3. Redeploy the web app after its environment variables are saved. Until R2 and the token are configured, `/api/kaggle` will show `bridgeConfigured:false` and uploads will refuse service.
 4. Open each **Kaggle notebook → Add-ons → Secrets**. Create `AIVIDEO_BRIDGE_TOKEN` with the **same** secret value. Enable this secret in the notebook. Optionally set `AIVIDEO_APP_URL` to `https://aivideo.mabrigkorie.org` if needed.
@@ -25,20 +25,27 @@
 Run the appropriate notebook's normal **generation cells first**. After confirming its finished media files exist under `/kaggle/working`, add and run **one Kaggle Python cell**:
 
 ```python
-import urllib.request
-urllib.request.urlretrieve(
-    "https://raw.githubusercontent.com/mabrig1/aivideo/main/scripts/kaggle_upload.py",
-    "/kaggle/working/kaggle_upload.py"
-)
-# Run the command for the notebook you are currently using:
-%run /kaggle/working/kaggle_upload.py --pipeline cinema --scan --project mabrig-cinema --consent
+import json, urllib.request
+app = "https://aivideo.mabrigkorie.org"
+with urllib.request.urlopen(app + "/api/kaggle") as response:
+    catalog = json.load(response)
+assert catalog["build"]["version"] == 2, "Deploy bridge v2 first"
+commit = catalog["build"]["commit"]
+assert commit and len(commit) == 40, "Verify the deployed Git revision first"
+uploader = f"https://raw.githubusercontent.com/mabrig1/aivideo/{commit}/scripts/kaggle_upload.py"
+urllib.request.urlretrieve(uploader, "/kaggle/working/kaggle_upload.py")
+%run /kaggle/working/kaggle_upload.py --pipeline cinema --scan --project mabrig-cinema --dry-run
 ```
+
+**Review the preview list first.** It reads no secrets and makes no uploads. Then replace `--dry-run` with `--consent`, preferably using one explicit `--file` for the first test. Never run an uploader downloaded from a moving `main` branch in a secret-enabled notebook.
 
 For voice cloning, change `--pipeline cinema` to `--pipeline voice`; for MuseTalk, use `--pipeline musetalk`. If your generated files have different names or locations, specify the exact file, rather than scanning:
 
 ```python
 %run /kaggle/working/kaggle_upload.py --pipeline cinema --project mabrig-cinema --file /kaggle/working/wan_broll/WAN_PADDLERS_01.mp4 --consent
 ```
+
+The uploader requires Python 3.9+ and `requests` (see `scripts/kaggle-requirements.txt`).
 
 The `--scan` option looks at a **small known set of output folders/patterns** and imports at most 12 matching files. Review the selected files: it could include previous runs' renders. Files are limited to 1 GiB and must be inside `/kaggle/working`. Only the authorized pipeline's media formats are permitted. The `--consent` flag confirms that you have permission to use the underlying music, voice and facial likeness; it is not an identity-verification system.
 
@@ -49,7 +56,7 @@ The Python client obtains the token from Kaggle Secrets. It asks your web app fo
 1. Open `https://aivideo.mabrigkorie.org/#kaggle-studio`.
 2. Choose the relevant notebook card to open it or copy a prebuilt import cell.
 3. In **Imported Cinema Library**, enter the owner token *only in the password field on your own app*. It is held in component memory, not localStorage and not included in URLs.
-4. Click **Load my imported renders**. The app returns up to 50 latest recorded artifacts with private, 10-minute download URLs. Use these as inputs for editing, assembly, or further human-reviewed scenes.
+4. Click **Load my imported renders**. The app returns a page of up to 50 manifest entries with private, 10-minute download URLs. Use the notebook filter and **Load more imports** to traverse the full library. Pages follow storage key order; records are sorted by completion date within each page, not globally. Use these as inputs for editing, assembly, or further human-reviewed scenes.
 
 **Never put this owner token on a publicly shared workstation.** Anyone possessing it could list imported assets and request uploads. The token has no built-in per-user authorization; for multi-user commercial deployment replace it with real authenticated user accounts and per-project authorization.
 
@@ -57,7 +64,11 @@ The Python client obtains the token from Kaggle Secrets. It asks your web app fo
 
 - **No files transit Vercel's request body**: the Python client uploads directly to R2 using a 15-minute presigned PUT URL.
 - The server grants presigned upload links **only to a valid owner token** and a known workflow/file type. R2 credentials stay server-side.
-- Completing an import requires a signed, tamper-resistant receipt and an R2 `HEAD` check verifying the exact declared byte length and MIME type.
+- V2 signs `Content-Length`, `Content-Type` and `If-None-Match: *`. The uploader must send every returned `uploadHeaders` value. The create-only condition prevents overwriting a completed object with the same upload URL.
+- Completion receipts bind the version, object identity, metadata and expiry. They expire after 30 minutes; upload URLs expire after 15 minutes. Successful completion retries reuse the original manifest. Legacy v1 receipts must be replaced with fresh v2 prepares.
+- Completing an import requires an R2 `HEAD` check verifying declared byte length and MIME metadata. Mismatched objects are deleted before rejection. MIME metadata is not media-content inspection or malware scanning.
+- Network errors are reported without signed URLs. API and upload redirects are refused.
+- Unfinished uploads that never call completion are not automatically deleted. Account for these during bucket maintenance; do not put a blanket expiry policy on completed media.
 - The R2 bucket should remain **private**; GET URLs expire after 10 minutes.
 - The public `GET /api/kaggle` returns only the three notebook names and whether import prerequisites are configured. Listing assets requires authorization.
 - Uploaded content remains **untrusted**, including when the model generates it. Review and scan before feeding it into other models, or redistributing.
@@ -71,7 +82,9 @@ The Python client obtains the token from Kaggle Secrets. It asks your web app fo
 ## Verification
 
 ```bash
-npm install
+npm ci
+python -m pip install -r scripts/kaggle-requirements.txt
+python -m unittest discover -s test -p 'test_*.py'
 npm test
 npx tsc --noEmit
 npm run build
@@ -79,6 +92,18 @@ python -m py_compile scripts/kaggle_upload.py
 ```
 
 End-to-end integration additionally requires **operator-controlled test files**, **real R2 credentials**, and **a Kaggle notebook session**. Do not report live uploads or generated video completion without observing successful calls to prepare, R2 PUT and complete.
+
+## Readiness and release verification
+
+`GET /api/kaggle` returns `build.version`, `build.commit`, a commit-pinned uploader URL, and separate token/storage configuration flags. Every code path requires a token of at least 32 characters and an HTTPS Cloudflare R2 S3 endpoint. Configuration presence does not prove R2 permissions, bucket privacy, notebook access, or a successful import.
+
+In the owner panel, **Check storage access** calls authenticated `GET /api/kaggle?action=diagnostics`. It performs one read-only list operation and explicitly reports that write access and bucket privacy remain unverified. It does not upload a test object.
+
+Before configuring secrets, confirm that the custom domain returns HTTP 200 JSON from `/api/kaggle`, `build.version:2`, and the expected deployed commit. A 404 indicates a release/routing mismatch, not simply missing secrets. Check the owning Vercel project, Git repository, production deployment and domain assignment. `VERCEL_GIT_COMMIT_SHA` supplies the source identity on Vercel; other build hosts may provide the same reviewed SHA as `GITHUB_SHA`. Without an identity, the panel refuses to copy a mutable uploader.
+
+After deployment/configuration, use a tiny explicitly selected owned file to verify: prepare 201 → direct R2 PUT 2xx → complete 201 → library listing → successful private download. Also verify that a repeat PUT to the same upload URL returns 412 and an unauthenticated asset request returns 401. Keep the upload URL out of shared logs. A storage check or CI pass alone is not end-to-end proof.
+
+The automated tests use a simulated S3 store and real SDK signing; they cover the HTTP flow, receipt tampering/expiry, mismatched-object cleanup, idempotent completion, pagination, auth, bounded requests and sanitized errors. They do not certify real R2 conditional-write enforcement or Kaggle execution.
 
 ## Troubleshooting
 

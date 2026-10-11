@@ -5,9 +5,13 @@ import {
   bridgeAuthorized,
   bridgeReady,
   completeArtifact,
+  checkBridgeStorage,
   listArtifacts,
   prepareArtifact,
 } from '../../../lib/kaggle-bridge';
+
+import { bridgeBuild, bridgeConfiguration } from '../../../lib/kaggle-config';
+import { readSmallJson, RequestBodyError } from '../../../lib/request-body';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -19,6 +23,7 @@ const json = (data: unknown, status = 200) =>
   });
 
 function errorResponse(error: unknown) {
+  if (error instanceof RequestBodyError) return json({ error: error.message }, error.status);
   if (error instanceof KaggleInputError) return json({ error: error.message }, 400);
   // Never return provider exceptions, signed URLs or storage credentials to callers.
   console.error('Kaggle bridge operation failed:', error instanceof Error ? error.name : 'unknown');
@@ -27,22 +32,26 @@ function errorResponse(error: unknown) {
 
 export async function GET(req: NextRequest) {
   const action = req.nextUrl.searchParams.get('action');
-  if (action !== 'assets') {
+  if (!action || action === 'catalog') {
     return json({
       pipelines: KAGGLE_PIPELINES,
+      build: bridgeBuild(),
+      configuration: bridgeConfiguration(),
       bridgeConfigured: bridgeReady(),
       mode: 'manual-kaggle-to-private-R2',
       liveNotebookExecution: false,
       message: 'Open a Kaggle notebook to run it; use the authenticated bridge to import finished files. Temporary Kaggle GPUs are not public app workers.',
     });
   }
+  if (action !== 'assets' && action !== 'diagnostics') return json({ error: 'Unknown action.' }, 400);
   if (!bridgeAuthorized(req.headers.get('authorization'))) {
     return json({ error: 'Owner token required.' }, 401);
   }
   if (!bridgeReady()) return json({ error: 'Import storage is not configured.' }, 503);
   try {
+    if (action === 'diagnostics') return json(await checkBridgeStorage());
     const pipeline = req.nextUrl.searchParams.get('pipeline') || undefined;
-    return json({ assets: await listArtifacts(pipeline) });
+    return json(await listArtifacts(pipeline, req.nextUrl.searchParams.get('cursor') || undefined));
   } catch (error) {
     return errorResponse(error);
   }
@@ -53,10 +62,9 @@ export async function POST(req: NextRequest) {
     return json({ error: 'Owner token required.' }, 401);
   }
   if (!bridgeReady()) return json({ error: 'Import storage is not configured.' }, 503);
-  const length = Number(req.headers.get('content-length') || '0');
-  if (length > 16_384) return json({ error: 'Request payload too large.' }, 413);
+
   try {
-    const body = await req.json() as Record<string, unknown>;
+    const body = await readSmallJson(req);
     if (body.action === 'prepare') {
       return json(await prepareArtifact(body), 201);
     }

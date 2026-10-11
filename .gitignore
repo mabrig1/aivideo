@@ -7,3 +7,8 @@ node_modules/
 !.env.example
 cloudflare-env.d.ts
 .DS_Store
+
+__pycache__/
+*.pyc
+*.tsbuildinfo
+next-env.d.ts

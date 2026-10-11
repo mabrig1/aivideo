@@ -25,14 +25,15 @@ type Catalog = {
   bridgeConfigured: boolean;
   liveNotebookExecution: boolean;
   message: string;
+  configuration: { tokenConfigured: boolean; storageConfigured: boolean };
+  build: { version: number; commit: string | null; uploaderUrl: string | null };
 };
-const SCRIPT_URL = 'https://raw.githubusercontent.com/mabrig1/aivideo/main/scripts/kaggle_upload.py';
 
-function notebookCell(pipeline: string) {
+function notebookCell(pipeline: string, scriptUrl: string) {
   return [
     'import urllib.request',
-    `urllib.request.urlretrieve("${SCRIPT_URL}", "/kaggle/working/kaggle_upload.py")`,
-    `%run /kaggle/working/kaggle_upload.py --pipeline ${pipeline} --scan --project mabrig-cinema --consent`,
+    `urllib.request.urlretrieve("${scriptUrl}", "/kaggle/working/kaggle_upload.py")`,
+    `%run /kaggle/working/kaggle_upload.py --pipeline ${pipeline} --scan --project mabrig-cinema --dry-run`,
   ].join('\n');
 }
 
@@ -43,27 +44,38 @@ export function KaggleBridgePanel() {
   const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState('');
   const [copied, setCopied] = useState('');
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [pipelineFilter, setPipelineFilter] = useState('');
+  const [diagnostic, setDiagnostic] = useState('');
+  const [checking, setChecking] = useState(false);
 
   useEffect(() => {
     fetch('/api/kaggle', { cache: 'no-store' })
       .then(async (response) => {
+        if (response.status === 404) throw new Error('This deployment does not include the notebook bridge. Check the production release.');
         if (!response.ok) throw new Error('Kaggle integration unavailable.');
-        setCatalog(await response.json() as Catalog);
+        const body = await response.json() as Catalog;
+        if (body.build?.version !== 2 || !body.configuration) throw new Error('Notebook bridge version mismatch. Refresh after the release finishes.');
+        setCatalog(body);
       })
-      .catch(() => setNotice('Could not load Kaggle notebook registry.'));
+      .catch((error) => setNotice(error instanceof Error ? error.message : 'Could not load Kaggle notebook registry.'));
   }, []);
 
   async function copyCell(pipeline: string) {
+    if (!catalog?.build.uploaderUrl) {
+      setNotice('This build has no verified source revision. Use the setup guide to select the reviewed uploader.');
+      return;
+    }
     try {
-      await navigator.clipboard.writeText(notebookCell(pipeline));
+      await navigator.clipboard.writeText(notebookCell(pipeline, catalog.build.uploaderUrl));
       setCopied(pipeline);
-      setNotice('Kaggle cell copied. Add AIVIDEO_BRIDGE_TOKEN in Kaggle Secrets before running it.');
+      setNotice('Preview cell copied. Review the file list first; replace --dry-run with --consent only when ready to import.');
     } catch {
       setNotice('Clipboard access was blocked. Open the integration guide to copy the cell.');
     }
   }
 
-  async function loadAssets() {
+  async function loadAssets(append = false) {
     if (!ownerToken.trim()) {
       setNotice('Enter the private owner token to load your imported files. It is not saved.');
       return;
@@ -71,20 +83,40 @@ export function KaggleBridgePanel() {
     setLoading(true);
     setNotice('');
     try {
-      const response = await fetch('/api/kaggle?action=assets', {
+      const query = new URLSearchParams({ action: 'assets' });
+      if (pipelineFilter) query.set('pipeline', pipelineFilter);
+      if (append && nextCursor) query.set('cursor', nextCursor);
+      const response = await fetch(`/api/kaggle?${query}`, {
         cache: 'no-store',
         headers: { Authorization: `Bearer ${ownerToken.trim()}` },
       });
       const body = await response.json();
       if (!response.ok) throw new Error(body?.error || 'Unable to load imported assets.');
-      setAssets(Array.isArray(body.assets) ? body.assets : []);
-      setNotice(body.assets?.length ? 'Private imported media loaded. Links expire after 10 minutes.' : 'No imported files found yet.');
+      const incoming: ImportedAsset[] = Array.isArray(body.assets) ? body.assets : [];
+      setAssets((current) => append ? [...new Map([...current, ...incoming].map(asset => [asset.id, asset])).values()] : incoming);
+      setNextCursor(body.nextCursor || null);
+      setNotice(body.assets?.length ? 'Private imported media loaded. Links expire after 10 minutes.' : 'No files on this page. Continue loading if more pages are available.');
     } catch (error) {
-      setAssets([]);
+      if (!append) { setAssets([]); setNextCursor(null); }
       setNotice(error instanceof Error ? error.message : 'Unable to load media.');
     } finally {
       setLoading(false);
     }
+  }
+
+  async function checkStorage() {
+    setChecking(true);
+    setDiagnostic('');
+    try {
+      const response = await fetch('/api/kaggle?action=diagnostics', {
+        cache: 'no-store', headers: { Authorization: `Bearer ${ownerToken.trim()}` },
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error || 'Storage check failed.');
+      setDiagnostic(body.message);
+    } catch (error) {
+      setDiagnostic(error instanceof Error ? error.message : 'Storage check failed.');
+    } finally { setChecking(false); }
   }
 
   return (
@@ -97,7 +129,7 @@ export function KaggleBridgePanel() {
         imports artifacts; it does not run a Kaggle GPU from your public website.
       </p>
       <div className="render">
-        <b>{catalog?.bridgeConfigured ? '● Private artifact import configured' : '○ Artifact import needs owner setup'}</b>
+        <b>{catalog?.bridgeConfigured ? '● Import settings present — test storage before importing' : '○ Artifact import needs owner setup'}</b>
         <span>
           Kaggle compute stays inside the user-operated notebook. R2 provides durable
           storage after a completed manual import. Voice and portrait use require permission.
@@ -105,6 +137,10 @@ export function KaggleBridgePanel() {
         </span>
       </div>
 
+      {catalog && <p className="hint">
+        Owner access: {catalog.configuration.tokenConfigured ? 'configured' : 'setup needed'} ·
+        Media storage: {catalog.configuration.storageConfigured ? 'settings present' : 'setup needed'}
+      </p>}
       <div className="templateGrid">
         {(catalog?.pipelines || []).map((pipeline, index) => (
           <article className="templateCard" key={pipeline.id}>
@@ -118,9 +154,9 @@ export function KaggleBridgePanel() {
             </a>
             <button type="button" onClick={() => copyCell(pipeline.id)}
                className="generate" style={{ marginTop: 4, padding: 10 }}>
-              {copied === pipeline.id ? '✓ Copied import cell' : 'Copy import cell'}
+              {copied === pipeline.id ? '✓ Copied preview cell' : 'Copy preview cell'}
             </button>
-            <small>Run this cell only after the notebook has created output files.</small>
+            <small>This cell lists finished files without uploading. Review them before confirming the import.</small>
           </article>
         ))}
       </div>
@@ -144,15 +180,28 @@ export function KaggleBridgePanel() {
         </div>
         <div className="panel">
           <h2>IMPORTED CINEMA LIBRARY</h2>
-          <label htmlFor="kaggle-owner-token">Owner token (never stored in your browser)</label>
+          <label htmlFor="kaggle-owner-token">Owner token (held only while this page is open)</label>
           <input id="kaggle-owner-token" type="password" value={ownerToken}
-            autoComplete="off" placeholder="Private bridge token"
-            onChange={(event) => setOwnerToken(event.target.value)} />
-          <button type="button" className="generate" onClick={loadAssets}
-            disabled={loading || !catalog?.bridgeConfigured}>
+            autoComplete="off" disabled={loading || checking} placeholder="Private bridge token"
+            onChange={(event) => { setOwnerToken(event.target.value); setAssets([]); setNextCursor(null); setDiagnostic(''); }} />
+          <button type="button" className="generate" onClick={() => loadAssets()}
+            disabled={loading || checking || !ownerToken.trim() || !catalog?.bridgeConfigured}>
             {loading ? 'Loading media…' : 'Load my imported renders'}
           </button>
-          {notice && <p style={{ color: '#f1c87d', fontSize: 12 }}>{notice}</p>}
+          <label htmlFor="kaggle-pipeline">Show imports from</label>
+          <select id="kaggle-pipeline" value={pipelineFilter} disabled={loading}
+            onChange={(event) => { setPipelineFilter(event.target.value); setAssets([]); setNextCursor(null); }}>
+            <option value="">All notebooks</option>
+            {(catalog?.pipelines || []).map(p => <option key={p.id} value={p.id}>{p.title}</option>)}
+          </select>
+          <button type="button" onClick={checkStorage} disabled={checking || !ownerToken.trim() || !catalog?.bridgeConfigured}>
+            {checking ? 'Checking storage…' : 'Check storage access'}
+          </button>
+          <button type="button" disabled={loading || checking} onClick={() => { setOwnerToken(''); setAssets([]); setNextCursor(null); setDiagnostic(''); setNotice('Private session cleared.'); }}>
+            Clear private session
+          </button>
+          {diagnostic && <p role="status">{diagnostic}</p>}
+          {notice && <p role="status" style={{ color: '#f1c87d', fontSize: 12 }}>{notice}</p>}
           <div style={{ display: 'grid', gap: 10, marginTop: 16 }}>
             {assets.map((asset) => (
               <div className="render" style={{ margin: 0 }} key={asset.id}>
@@ -163,8 +212,10 @@ export function KaggleBridgePanel() {
               </div>
             ))}
           </div>
+          {nextCursor && <button type="button" onClick={() => loadAssets(true)} disabled={loading}>Load more imports</button>}
         </div>
       </div>
+      {catalog?.build.commit && <p className="hint">Bridge v{catalog.build.version} · Release {catalog.build.commit.slice(0, 7)}</p>}
     </section>
   );
 }

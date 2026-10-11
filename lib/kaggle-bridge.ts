@@ -1,5 +1,6 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import {
+  DeleteObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
   ListObjectsV2Command,
@@ -7,6 +8,8 @@ import {
   S3Client,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { bridgeReady, MIN_BRIDGE_TOKEN_LENGTH } from './kaggle-config';
+export { bridgeReady } from './kaggle-config';
 
 export const KAGGLE_PIPELINES = [
   {
@@ -67,19 +70,9 @@ const INDEX_PREFIX = 'kaggle/manifests';
 
 export class KaggleInputError extends Error {}
 
-export function bridgeReady(): boolean {
-  return Boolean(
-    (process.env.KAGGLE_BRIDGE_TOKEN?.trim().length || 0) >= 24 &&
-      process.env.R2_ENDPOINT?.trim() &&
-      process.env.R2_ACCESS_KEY_ID?.trim() &&
-      process.env.R2_SECRET_ACCESS_KEY?.trim() &&
-      process.env.R2_BUCKET?.trim(),
-  );
-}
-
 export function bridgeAuthorized(header: string | null): boolean {
   const secret = process.env.KAGGLE_BRIDGE_TOKEN?.trim() || '';
-  if (secret.length < 24 || !header?.startsWith('Bearer ')) return false;
+  if (secret.length < MIN_BRIDGE_TOKEN_LENGTH || !header?.startsWith('Bearer ')) return false;
   const supplied = header.slice(7);
   const givenBytes = Buffer.from(supplied);
   const expectedBytes = Buffer.from(secret);
@@ -95,6 +88,8 @@ function r2() {
     bucket: process.env.R2_BUCKET!.trim(),
     client: new S3Client({
       region: 'auto',
+      requestChecksumCalculation: 'WHEN_REQUIRED',
+      responseChecksumValidation: 'WHEN_REQUIRED',
       endpoint,
       credentials: {
         accessKeyId: process.env.R2_ACCESS_KEY_ID!.trim(),
@@ -104,9 +99,9 @@ function r2() {
   };
 }
 
-function mac(key: string, pipeline: string, projectId: string, filename: string, sizeBytes: number, contentType: string) {
-  return createHmac('sha256', process.env.KAGGLE_BRIDGE_TOKEN!)
-    .update(JSON.stringify([key, pipeline, projectId, filename, sizeBytes, contentType]))
+function mac(key: string, pipeline: string, projectId: string, filename: string, sizeBytes: number, contentType: string, expiresAt: number) {
+  return createHmac('sha256', process.env.KAGGLE_BRIDGE_TOKEN!.trim())
+    .update(JSON.stringify([2, key, pipeline, projectId, filename, sizeBytes, contentType, expiresAt]))
     .digest('hex');
 }
 
@@ -148,12 +143,20 @@ export async function prepareArtifact(input: unknown) {
     Bucket: bucket,
     Key: key,
     ContentType: validated.contentType,
+    ContentLength: validated.sizeBytes,
+    IfNoneMatch: '*',
   });
-  const uploadUrl = await getSignedUrl(client, put, { expiresIn: 900 });
+  const expiresAt = Math.floor(Date.now() / 1000) + 1800;
+  const uploadUrl = await getSignedUrl(client, put, {
+    expiresIn: 900,
+    signableHeaders: new Set(['content-type', 'content-length', 'if-none-match']),
+  });
   return {
-    ...validated, id, key, uploadUrl, expiresInSeconds: 900,
-    proof: mac(key, validated.pipeline, validated.projectId, validated.filename, validated.sizeBytes, validated.contentType),
-    instructions: 'PUT the raw bytes to uploadUrl using Content-Type returned here, then call complete.',
+    ...validated, id, key, uploadUrl, expiresInSeconds: 900, expiresAt,
+    version: 2,
+    uploadHeaders: { 'Content-Type': validated.contentType, 'Content-Length': String(validated.sizeBytes), 'If-None-Match': '*' },
+    proof: mac(key, validated.pipeline, validated.projectId, validated.filename, validated.sizeBytes, validated.contentType, expiresAt),
+    instructions: 'PUT raw bytes with all uploadHeaders, then complete with the receipt before expiresAt.',
   };
 }
 
@@ -165,8 +168,12 @@ export async function completeArtifact(input: unknown): Promise<KaggleArtifact> 
   if (!/^[0-9a-f-]{36}$/.test(id)) throw new KaggleInputError('Invalid upload id.');
   const safeName = parsed.filename.replace(/\s+/g, '-');
   const key = `${OUTPUT_PREFIX}/${parsed.pipeline}/${id}/${safeName}`;
+  const expiresAt = Number(data.expiresAt);
+  if (data.version !== 2 || !Number.isSafeInteger(expiresAt) || expiresAt <= Math.floor(Date.now() / 1000)) {
+    throw new KaggleInputError('Upload receipt expired or obsolete. Prepare a fresh upload with the current uploader.');
+  }
   const proof = String(data.proof || '');
-  const expected = mac(key, parsed.pipeline, parsed.projectId, parsed.filename, parsed.sizeBytes, parsed.contentType);
+  const expected = mac(key, parsed.pipeline, parsed.projectId, parsed.filename, parsed.sizeBytes, parsed.contentType, expiresAt);
   const bytes = Buffer.from(proof);
   const expectedBytes = Buffer.from(expected);
   if (bytes.length !== expectedBytes.length || !timingSafeEqual(bytes, expectedBytes)) {
@@ -176,7 +183,17 @@ export async function completeArtifact(input: unknown): Promise<KaggleArtifact> 
   const head = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
   if (head.ContentLength !== parsed.sizeBytes ||
       (head.ContentType || '').split(';')[0].toLowerCase() !== parsed.contentType) {
-    throw new KaggleInputError('Uploaded object does not match its declared size and content type.');
+    await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+    throw new KaggleInputError('Uploaded object did not match its receipt and was removed. Prepare a fresh upload.');
+  }
+  const manifestKey = `${INDEX_PREFIX}/${parsed.pipeline}/${id}.json`;
+  try {
+    const existing = await client.send(new GetObjectCommand({ Bucket: bucket, Key: manifestKey }));
+    const artifact = JSON.parse(await existing.Body?.transformToString() || '{}') as KaggleArtifact;
+    if (artifact.key !== key || artifact.etag !== (head.ETag || null)) throw new Error('Stored artifact conflict.');
+    return artifact;
+  } catch (error) {
+    if (!isMissing(error)) throw error;
   }
   const artifact: KaggleArtifact = {
     id,
@@ -189,23 +206,33 @@ export async function completeArtifact(input: unknown): Promise<KaggleArtifact> 
     completedAt: new Date().toISOString(),
     etag: head.ETag || null,
   };
-  await client.send(new PutObjectCommand({
-    Bucket: bucket,
-    Key: `${INDEX_PREFIX}/${parsed.pipeline}/${id}.json`,
-    ContentType: 'application/json',
-    Body: JSON.stringify(artifact),
-  }));
+  try {
+    await client.send(new PutObjectCommand({
+      Bucket: bucket,
+      Key: manifestKey,
+      IfNoneMatch: '*',
+      ContentType: 'application/json',
+      Body: JSON.stringify(artifact),
+    }));
+  } catch (error) {
+    if ((error as { $metadata?: { httpStatusCode?: number } })?.$metadata?.httpStatusCode !== 412) throw error;
+    const stored = await client.send(new GetObjectCommand({ Bucket: bucket, Key: manifestKey }));
+    const winner = JSON.parse(await stored.Body?.transformToString() || '{}') as KaggleArtifact;
+    if (winner.key !== key || winner.etag !== artifact.etag) throw new Error('Stored artifact conflict.');
+    return winner;
+  }
   return artifact;
 }
 
-export async function listArtifacts(pipeline?: string) {
+export async function listArtifacts(pipeline?: string, cursor?: string) {
   if (pipeline && !KAGGLE_PIPELINES.some((item) => item.id === pipeline)) {
     throw new KaggleInputError('Unknown Kaggle pipeline.');
   }
+  if (cursor && (cursor.length > 2048 || /[\x00-\x1f]/.test(cursor))) throw new KaggleInputError('Invalid page cursor.');
   const { bucket, client } = r2();
   const prefix = pipeline ? `${INDEX_PREFIX}/${pipeline}/` : `${INDEX_PREFIX}/`;
   const items = await client.send(new ListObjectsV2Command({
-    Bucket: bucket, Prefix: prefix, MaxKeys: 100,
+    Bucket: bucket, Prefix: prefix, MaxKeys: 50, ContinuationToken: cursor,
   }));
   const keys = (items.Contents || []).flatMap((item) =>
     item.Key?.endsWith('.json') ? [item.Key] : []);
@@ -213,8 +240,13 @@ export async function listArtifacts(pipeline?: string) {
     try {
       const result = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
       const manifest = JSON.parse(await result.Body?.transformToString() || '{}') as KaggleArtifact;
-      if (!manifest.key?.startsWith(`${OUTPUT_PREFIX}/`) ||
-          !KAGGLE_PIPELINES.some((item) => item.id === manifest.pipeline)) return null;
+      if (!validManifest(manifest, key)) return null;
+      try {
+        await client.send(new HeadObjectCommand({ Bucket: bucket, Key: manifest.key, IfMatch: manifest.etag || undefined }));
+      } catch (error) {
+        if (isMissing(error) || (error as { $metadata?: { httpStatusCode?: number } })?.$metadata?.httpStatusCode === 412) return null;
+        throw error;
+      }
       const downloadUrl = await getSignedUrl(client, new GetObjectCommand({
         Bucket: bucket, Key: manifest.key,
       }), { expiresIn: 600 });
@@ -223,11 +255,34 @@ export async function listArtifacts(pipeline?: string) {
         filename: manifest.filename, sizeBytes: manifest.sizeBytes,
         completedAt: manifest.completedAt, downloadUrl,
       };
-    } catch {
-      // Stale or deleted objects must not break the entire listing.
-      return null;
+    } catch (error) {
+      if (isMissing(error) || error instanceof SyntaxError) return null;
+      throw error;
     }
   }));
-  return manifests.filter((item) => item !== null)
-    .sort((a, b) => b.completedAt.localeCompare(a.completedAt)).slice(0, 50);
+  return {
+    assets: manifests.filter((item) => item !== null).sort((a, b) => b.completedAt.localeCompare(a.completedAt)),
+    nextCursor: items.IsTruncated ? items.NextContinuationToken || null : null,
+  };
+}
+
+function isMissing(error: unknown) {
+  return (error as { $metadata?: { httpStatusCode?: number } })?.$metadata?.httpStatusCode === 404;
+}
+
+function validManifest(value: KaggleArtifact, manifestKey: string): boolean {
+  try {
+    const parsed = parseArtifactInput({ ...value, consentConfirmed: true });
+    return /^[0-9a-f-]{36}$/.test(value.id) &&
+      manifestKey === `${INDEX_PREFIX}/${parsed.pipeline}/${value.id}.json` &&
+      value.key === `${OUTPUT_PREFIX}/${parsed.pipeline}/${value.id}/${parsed.filename.replace(/\s+/g, '-')}` &&
+      value.contentType === parsed.contentType && Number.isFinite(Date.parse(value.completedAt));
+  } catch { return false; }
+}
+
+export async function checkBridgeStorage() {
+  const { bucket, client } = r2();
+  await client.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: `${INDEX_PREFIX}/`, MaxKeys: 1 }));
+  return { storageListVerified: true, writeVerified: false, bucketPrivacyVerified: false,
+    message: 'Storage listing succeeded. A test import is still required to verify upload and download; check bucket privacy in Cloudflare.' };
 }
