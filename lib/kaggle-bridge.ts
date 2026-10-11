@@ -69,7 +69,7 @@ export class KaggleInputError extends Error {}
 
 export function bridgeReady(): boolean {
   return Boolean(
-    process.env.KAGGLE_BRIDGE_TOKEN?.trim() &&
+    (process.env.KAGGLE_BRIDGE_TOKEN?.trim().length || 0) >= 24 &&
       process.env.R2_ENDPOINT?.trim() &&
       process.env.R2_ACCESS_KEY_ID?.trim() &&
       process.env.R2_SECRET_ACCESS_KEY?.trim() &&
