@@ -74,6 +74,19 @@ export function phase1Services(): ServiceState[] {
       purpose: 'Multi-model video gateway fallback',
     },
     {
+      key: 'kaggle-import',
+      label: 'Kaggle Notebook Import',
+      required: false,
+      configured: yes(
+        'KAGGLE_BRIDGE_TOKEN',
+        'R2_ENDPOINT',
+        'R2_ACCESS_KEY_ID',
+        'R2_SECRET_ACCESS_KEY',
+        'R2_BUCKET',
+      ),
+      purpose: 'Owner-only finished media imports from Cinema Tools, Voice Clone, and MuseTalk notebooks',
+    },
+    {
       key: 'mongodb',
       label: 'MongoDB',
       required: true,

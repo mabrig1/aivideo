@@ -10,7 +10,8 @@
     "cf:build": "opennextjs-cloudflare build",
     "cf:preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
     "deploy": "opennextjs-cloudflare build && wrangler deploy",
-    "cf:typegen": "wrangler types --env-interface CloudflareEnv cloudflare-env.d.ts"
+    "cf:typegen": "wrangler types --env-interface CloudflareEnv cloudflare-env.d.ts",
+    "test": "node --import tsx --test test/*.test.ts"
   },
   "dependencies": {
     "@opennextjs/cloudflare": "latest",
@@ -20,9 +21,12 @@
     "next": "latest",
     "react": "latest",
     "react-dom": "latest",
-    "typescript": "latest"
+    "typescript": "latest",
+    "@aws-sdk/client-s3": "^3.800.0",
+    "@aws-sdk/s3-request-presigner": "^3.800.0"
   },
   "devDependencies": {
-    "wrangler": "latest"
+    "wrangler": "latest",
+    "tsx": "^4.20.0"
   }
 }
