@@ -1,4 +1,4 @@
-export type ExecutionProviderId = 'local-wan' | 'gemini-veo' | 'runway';
+export type ExecutionProviderId = 'local-wan' | 'local-musetalk' | 'gemini-veo' | 'runway';
 
 export type VideoExecutionInput = {
   missionId: string;

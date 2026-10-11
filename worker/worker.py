@@ -25,6 +25,9 @@ class RenderJob(BaseModel):
     reference_urls: list[str] = []
     brief: str
     aspect_ratio: str = '16:9'
+    engine: str = 'wan'
+    source_image_url: str = ''
+    source_video_url: str = ''
 
 
 def auth(authorization: str | None):
@@ -137,11 +140,18 @@ def create_job(
 
     job_id = f'gpu_{uuid.uuid4().hex}'
     payload = job.model_dump()
+    if payload['engine'] not in {'wan', 'musetalk'}:
+        raise HTTPException(status_code=400, detail='Unsupported generation engine.')
+    if payload['engine'] == 'musetalk' and not payload['audio_url']:
+        raise HTTPException(status_code=400, detail='MuseTalk requires audio_url.')
+    if payload['engine'] == 'musetalk' and not (payload['source_video_url'] or payload['source_image_url'] or payload['reference_urls']):
+        raise HTTPException(status_code=400, detail='MuseTalk requires a presenter source.')
 
     with jobs_lock:
         jobs[job_id] = {
             'jobId': job_id,
             'projectId': job.project_id,
+            'engine': job.engine,
             'status': 'queued',
             'outputUrls': [],
             'error': None,
@@ -156,14 +166,18 @@ def create_job(
         'jobId': job_id,
         'projectId': job.project_id,
         'status': 'queued',
-        'pipeline': [
+        'pipeline': (
+            ['presenter-prepare', 'audio-analysis', 'musetalk-lip-sync', 'qc-repair', 'ffmpeg-master']
+            if job.engine == 'musetalk'
+            else [
             'audio-analysis',
             'storyboard',
             'shot-generation',
             'lip-sync',
             'qc-repair',
             'ffmpeg-master',
-        ],
+            ]
+        ),
         'note': 'Job accepted by the operator-controlled generation executable.',
     }
 
