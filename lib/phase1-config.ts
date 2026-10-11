@@ -1,3 +1,4 @@
+import { bridgeReady } from './kaggle-config';
 export type ServiceState = {
   key: string;
   label: string;
@@ -77,13 +78,7 @@ export function phase1Services(): ServiceState[] {
       key: 'kaggle-import',
       label: 'Kaggle Notebook Import',
       required: false,
-      configured: yes(
-        'KAGGLE_BRIDGE_TOKEN',
-        'R2_ENDPOINT',
-        'R2_ACCESS_KEY_ID',
-        'R2_SECRET_ACCESS_KEY',
-        'R2_BUCKET',
-      ),
+      configured: bridgeReady(),
       purpose: 'Owner-only finished media imports from Cinema Tools, Voice Clone, and MuseTalk notebooks',
     },
     {

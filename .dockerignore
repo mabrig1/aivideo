@@ -1,0 +1,7 @@
+node_modules
+.next
+.open-next
+.git
+.env*
+__pycache__
+*.tsbuildinfo

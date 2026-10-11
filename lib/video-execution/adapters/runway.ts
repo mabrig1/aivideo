@@ -102,7 +102,7 @@ export const runwayAdapter: VideoExecutionAdapter = {
     );
 
     const estimatedCredits = result.routing?.estimatedCost;
-    if (typeof estimatedCredits !== 'number') {
+    if (typeof estimatedCredits !== 'number' || !Number.isFinite(estimatedCredits) || estimatedCredits < 0) {
       return {
         ok: false,
         providerId: 'runway',
@@ -112,12 +112,15 @@ export const runwayAdapter: VideoExecutionAdapter = {
       };
     }
 
-    const cap =
+    const requestedCap =
       typeof input.maxRunwayCredits === 'number'
         ? input.maxRunwayCredits
         : Number(process.env.RUNWAY_MAX_CREDITS_PER_GENERATION || 0);
 
-    if (!(cap > 0)) {
+    const serverCap = Number(process.env.RUNWAY_MAX_CREDITS_PER_GENERATION || 0);
+    const cap = serverCap > 0 ? Math.min(requestedCap, serverCap) : requestedCap;
+
+    if (!(cap > 0) || !Number.isFinite(cap)) {
       return {
         ok: false,
         providerId: 'runway',

@@ -27,6 +27,9 @@ export type ProductionRouting = {
   selectedProviderId: string | null;
   requiresHumanApproval: boolean;
   warnings: string[];
+  requestedAspectRatio?: string;
+  generationAspectRatio?: string;
+  finishingStrategy?: string;
 };
 
 export type ProductionJob = {
@@ -173,6 +176,12 @@ export function createProduction(input: {
       ? ` Video route: ${input.routing.selectedProviderId} (${input.routing.mode}).`
       : ` Video route unresolved (${input.routing.mode}).`
     : '';
+  const ratioSummary =
+    input.routing?.requestedAspectRatio &&
+    input.routing?.generationAspectRatio &&
+    input.routing.requestedAspectRatio !== input.routing.generationAspectRatio
+      ? ` Generation ratio ${input.routing.generationAspectRatio}; master ratio ${input.routing.requestedAspectRatio}.`
+      : '';
 
   const job: ProductionJob = {
     id,
@@ -196,7 +205,10 @@ export function createProduction(input: {
     routing: input.routing,
     outputs: {},
     events: [
-      `${now} Production assigned to autonomous crew.${routeSummary}`,
+      `${now} Production assigned to autonomous crew.${routeSummary}${ratioSummary}`,
+      ...(input.routing?.finishingStrategy
+        ? [`${now} Finishing plan: ${input.routing.finishingStrategy}`]
+        : []),
       ...(input.routing?.warnings ?? []).map(
         (warning) => `${now} Router warning: ${warning}`,
       ),
@@ -251,7 +263,9 @@ export function advanceProduction(id: string) {
   job.events.push(`${stamp()} ${current.agent} approved ${current.id}.`);
 
   if (current.id === 'finish') {
-    job.outputs.master = `master://${job.id}/16x9.mp4`;
+    const masterRatio =
+      job.routing?.requestedAspectRatio || job.ratio || '16:9';
+    job.outputs.master = `master://${job.id}/${masterRatio}.mp4`;
     job.outputs.vertical = `master://${job.id}/9x16.mp4`;
     job.outputs.thumbnail = `master://${job.id}/thumbnail.jpg`;
   }

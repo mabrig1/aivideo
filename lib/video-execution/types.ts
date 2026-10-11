@@ -1,4 +1,4 @@
-export type ExecutionProviderId = 'local-wan' | 'gemini-veo' | 'runway';
+export type ExecutionProviderId = 'local-wan' | 'local-musetalk' | 'gemini-veo' | 'runway';
 
 export type VideoExecutionInput = {
   missionId: string;
@@ -10,6 +10,15 @@ export type VideoExecutionInput = {
   audioUrl?: string;
   referenceImageUrls?: string[];
   candidateProviderIds: ExecutionProviderId[];
+  /**
+   * Short-lived HMAC approval issued by the operator-only approval endpoint.
+   * Metered providers are not executable without a valid signed approval.
+   */
+  approvalToken?: string;
+  /**
+   * Legacy request metadata retained for compatibility. It is not trusted as
+   * authorization; signed approvalToken scope is authoritative.
+   */
   approvedPaidProviderIds?: ExecutionProviderId[];
   maxRunwayCredits?: number;
 };

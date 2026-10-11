@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { planAspectRatio } from '../lib/video-router/aspect-ratio';
 
 type Mode = 'free-only' | 'free-preferred' | 'commercial-safe' | 'best-quality';
 
@@ -49,6 +50,9 @@ export type VideoRouterSelection = {
   selectedProviderId: string | null;
   requiresHumanApproval: boolean;
   warnings: string[];
+  requestedAspectRatio: string;
+  generationAspectRatio: '16:9' | '9:16' | '1:1';
+  finishingStrategy: string;
 };
 
 export function VideoRouterPanel({
@@ -84,6 +88,10 @@ export function VideoRouterPanel({
     () => new Map(providers.map((provider) => [provider.id, provider])),
     [providers],
   );
+  const aspectPlan = useMemo(
+    () => planAspectRatio(aspectRatio),
+    [aspectRatio],
+  );
 
   async function route() {
     setRouting(true);
@@ -98,9 +106,7 @@ export function VideoRouterPanel({
           request: {
             prompt: prompt || 'Create a cinematic music-video shot.',
             durationSeconds: 8,
-            aspectRatio: ['16:9', '9:16', '1:1'].includes(aspectRatio)
-              ? aspectRatio
-              : '16:9',
+            aspectRatio: aspectPlan.generationAspectRatio,
             source: 'text',
             mode,
             commercialUse,
@@ -127,6 +133,9 @@ export function VideoRouterPanel({
         warnings: Array.isArray(payload?.decision?.warnings)
           ? payload.decision.warnings
           : [],
+        requestedAspectRatio: aspectPlan.requestedAspectRatio,
+        generationAspectRatio: aspectPlan.generationAspectRatio,
+        finishingStrategy: aspectPlan.finishingStrategy,
       };
       onSelection?.(selection);
     } catch (err) {
@@ -141,6 +150,9 @@ export function VideoRouterPanel({
         selectedProviderId: null,
         requiresHumanApproval: false,
         warnings: [message],
+        requestedAspectRatio: aspectPlan.requestedAspectRatio,
+        generationAspectRatio: aspectPlan.generationAspectRatio,
+        finishingStrategy: aspectPlan.finishingStrategy,
       });
     } finally {
       setRouting(false);
@@ -207,6 +219,16 @@ export function VideoRouterPanel({
             }
           />
         </>
+      )}
+
+      {aspectPlan.requiresFinishing && (
+        <div className="render">
+          <b>
+            Master {aspectPlan.requestedAspectRatio} · generate{' '}
+            {aspectPlan.generationAspectRatio}
+          </b>
+          <span>{aspectPlan.finishingStrategy}</span>
+        </div>
       )}
 
       <button type="button" className="generate" onClick={route} disabled={routing}>

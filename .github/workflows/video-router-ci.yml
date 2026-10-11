@@ -16,19 +16,31 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Python worker syntax
+        run: python3 -m py_compile worker/worker.py worker/wan_server.py worker/ffmpeg_worker.py
+
       - name: Use Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
 
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
+
+      - name: Lint
+        run: npm run lint
 
       - name: Typecheck
         run: npx tsc --noEmit
 
       - name: Kaggle bridge contract tests
         run: npm test
+
+      - name: Install uploader test dependency
+        run: python -m pip install -r scripts/kaggle-requirements.txt
+
+      - name: Python notebook uploader tests
+        run: python -m unittest discover -s test -p 'test_*.py'
 
       - name: Python notebook uploader syntax
         run: python -m py_compile scripts/kaggle_upload.py

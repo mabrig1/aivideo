@@ -1,0 +1,138 @@
+name: Minimal render smoke
+
+on:
+  pull_request:
+    paths:
+      - 'app/api/render/**'
+      - 'lib/production-runtime.ts'
+      - 'worker/**'
+      - 'package.json'
+      - '.github/workflows/minimal-render-smoke.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  render-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      mongo:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.runCommand({ ping: 1 }).ok'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      MONGODB_URI: mongodb://127.0.0.1:27017/mabrigverse
+      REDIS_URL: redis://127.0.0.1:6379
+      STORAGE_DRIVER: local
+      LOCAL_RENDER_ENABLED: "true"
+      RENDER_TOKEN: ci-render-test-token-12345678901234567890
+      LOCAL_MEDIA_ROOT: /tmp/mabrigverse-media
+      GPU_WORKER_URL: http://127.0.0.1:8080
+      GPU_WORKER_TOKEN: ci-worker
+      NEXT_PUBLIC_APP_URL: http://127.0.0.1:3000
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install system and app dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg jq
+          npm ci --no-audit --no-fund
+          pip install -r worker/requirements.txt
+
+      - name: Build Next app
+        run: npm run build
+
+      - name: Start worker and app
+        run: |
+          mkdir -p "$LOCAL_MEDIA_ROOT"
+          python worker/ffmpeg_worker.py > /tmp/mabrig-worker.log 2>&1 &
+          npm start > /tmp/mabrig-app.log 2>&1 &
+          for i in {1..30}; do
+            if curl -fsS http://127.0.0.1:8080/health >/dev/null && curl -fsS http://127.0.0.1:3000/ >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          cat /tmp/mabrig-worker.log || true
+          cat /tmp/mabrig-app.log || true
+          exit 1
+
+      - name: Generate and upload test audio
+        id: upload
+        run: |
+          ffmpeg -y -f lavfi -i 'sine=frequency=440:duration=3' -c:a pcm_s16le /tmp/test-tone.wav
+          RESPONSE=$(curl -fsS -H "Authorization: Bearer $RENDER_TOKEN" -X POST http://127.0.0.1:3000/api/render \
+            -F 'audio=@/tmp/test-tone.wav;type=audio/wav' \
+            -F 'brief=CI end-to-end production proof' \
+            -F 'ratio=16:9')
+          echo "$RESPONSE"
+          JOB_ID=$(echo "$RESPONSE" | jq -r '.id')
+          test -n "$JOB_ID" && test "$JOB_ID" != "null"
+          echo "job_id=$JOB_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for worker QC
+        run: |
+          JOB_ID='${{ steps.upload.outputs.job_id }}'
+          for i in {1..60}; do
+            STATUS=$(curl -fsS -H "Authorization: Bearer $RENDER_TOKEN" "http://127.0.0.1:3000/api/render/$JOB_ID")
+            STATE=$(echo "$STATUS" | jq -r '.state')
+            echo "state=$STATE"
+            if [ "$STATE" = "ready" ]; then
+              echo "$STATUS" | jq -e '.qc.passed == true'
+              exit 0
+            fi
+            if [ "$STATE" = "failed" ]; then
+              echo "$STATUS"
+              cat /tmp/mabrig-worker.log || true
+              exit 1
+            fi
+            sleep 2
+          done
+          cat /tmp/mabrig-worker.log || true
+          exit 1
+
+      - name: Download and verify master
+        run: |
+          JOB_ID='${{ steps.upload.outputs.job_id }}'
+          curl -fsSL -H "Authorization: Bearer $RENDER_TOKEN" "http://127.0.0.1:3000/api/render/$JOB_ID/download" -o /tmp/master.mp4
+          test -s /tmp/master.mp4
+          VIDEO_CODEC=$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of default=nw=1:nk=1 /tmp/master.mp4)
+          AUDIO_CODEC=$(ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of default=nw=1:nk=1 /tmp/master.mp4)
+          test "$VIDEO_CODEC" = "h264"
+          test "$AUDIO_CODEC" = "aac"
+          ffprobe -v error -show_entries format=duration,size -of json /tmp/master.mp4
+
+      - name: Print logs on failure
+        if: failure()
+        run: |
+          echo '--- worker ---'
+          cat /tmp/mabrig-worker.log || true
+          echo '--- app ---'
+          cat /tmp/mabrig-app.log || true

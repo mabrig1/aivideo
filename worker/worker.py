@@ -13,6 +13,7 @@ app = FastAPI(title='Mabrig Verse GPU Worker', version='0.2.0')
 
 TOKEN = os.getenv('GPU_WORKER_TOKEN', '')
 GENERATION_EXECUTABLE = os.getenv('VIDEO_GENERATION_EXECUTABLE', '').strip()
+GENERATION_ENGINES = [engine.strip() for engine in os.getenv('VIDEO_GENERATION_ENGINES', 'wan').split(',') if engine.strip() in {'wan', 'musetalk'}]
 GENERATION_TIMEOUT_SECONDS = int(os.getenv('VIDEO_GENERATION_TIMEOUT_SECONDS', '900'))
 
 jobs: dict[str, dict] = {}
@@ -25,10 +26,16 @@ class RenderJob(BaseModel):
     reference_urls: list[str] = []
     brief: str
     aspect_ratio: str = '16:9'
+    engine: str = 'wan'
+    source_image_url: str = ''
+    source_video_url: str = ''
+    duration_seconds: float = 8
 
 
 def auth(authorization: str | None):
-    if TOKEN and authorization != f'Bearer {TOKEN}':
+    if not TOKEN:
+        raise HTTPException(status_code=503, detail='GPU_WORKER_TOKEN is not configured.')
+    if authorization != f'Bearer {TOKEN}':
         raise HTTPException(status_code=401, detail='Unauthorized')
 
 
@@ -113,6 +120,7 @@ def health():
         'gpuWorker': True,
         'ffmpeg': ffmpeg,
         'generationReady': ready,
+        'generationEngines': GENERATION_ENGINES if ready else [],
         'detail': (
             'Generation executable is configured and executable.'
             if ready
@@ -137,11 +145,18 @@ def create_job(
 
     job_id = f'gpu_{uuid.uuid4().hex}'
     payload = job.model_dump()
+    if payload['engine'] not in GENERATION_ENGINES:
+        raise HTTPException(status_code=400, detail='Unsupported generation engine.')
+    if payload['engine'] == 'musetalk' and not payload['audio_url']:
+        raise HTTPException(status_code=400, detail='MuseTalk requires audio_url.')
+    if payload['engine'] == 'musetalk' and not (payload['source_video_url'] or payload['source_image_url'] or payload['reference_urls']):
+        raise HTTPException(status_code=400, detail='MuseTalk requires a presenter source.')
 
     with jobs_lock:
         jobs[job_id] = {
             'jobId': job_id,
             'projectId': job.project_id,
+            'engine': job.engine,
             'status': 'queued',
             'outputUrls': [],
             'error': None,
@@ -156,14 +171,18 @@ def create_job(
         'jobId': job_id,
         'projectId': job.project_id,
         'status': 'queued',
-        'pipeline': [
+        'pipeline': (
+            ['presenter-prepare', 'audio-analysis', 'musetalk-lip-sync', 'qc-repair', 'ffmpeg-master']
+            if job.engine == 'musetalk'
+            else [
             'audio-analysis',
             'storyboard',
             'shot-generation',
             'lip-sync',
             'qc-repair',
             'ffmpeg-master',
-        ],
+            ]
+        ),
         'note': 'Job accepted by the operator-controlled generation executable.',
     }
 
