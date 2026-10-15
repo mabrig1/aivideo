@@ -12,7 +12,7 @@
   "r2_buckets": [
     {
       "binding": "VIDEO_ASSETS",
-      "bucket_name": "mabrig-verse"
+      "bucket_name": "aivideo-assets"
     }
   ],
   "routes": [

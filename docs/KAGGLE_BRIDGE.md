@@ -14,6 +14,8 @@
 
 ## One-time configuration
 
+For the Cloudflare deployment, first create a private bucket named **`aivideo-assets`** in the same account as `CLOUDFLARE_ACCOUNT_ID`. `wrangler.jsonc` binds that bucket as `VIDEO_ASSETS`; deployment requires it to exist. This bucket is dedicated to AI Video and separate from the Mabrig Verse app. Keep public access disabled. The Kaggle bridge also requires the S3 settings below, including `R2_BUCKET=aivideo-assets`; the Worker binding alone is not sufficient. For Cloudflare, save these runtime settings on the **aivideo Worker**, using secrets for credentials and tokens. The Vercel instructions below apply only when hosting the app on Vercel.
+
 1. Create a private Cloudflare R2 bucket (or reuse your dedicated, access-controlled media bucket). Set `R2_ENDPOINT` to the `https://<account>.r2.cloudflarestorage.com` S3 endpoint; set `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, and `R2_BUCKET` in **Vercel → aivideo → Settings → Environment Variables**. These are server-only. Grant credentials only the required bucket permissions: list, read, write and delete (delete removes a rejected upload). Keep public access disabled.
 2. Generate a **new random secret, at least 32 characters**; for example, locally run `python -c "import secrets; print(secrets.token_urlsafe(48))"`. Set it in the same Vercel project as `KAGGLE_BRIDGE_TOKEN` for the relevant environments. Never use `NEXT_PUBLIC_` for this token. Existing unrelated `VIDEO_EXECUTION_TOKEN` is separate.
 3. Redeploy the web app after its environment variables are saved. Until R2 and the token are configured, `/api/kaggle` will show `bridgeConfigured:false` and uploads will refuse service.
