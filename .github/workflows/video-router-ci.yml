@@ -50,3 +50,6 @@ jobs:
 
       - name: Cloudflare Worker build
         run: npm run cf:build
+
+      - name: Cloudflare Worker runtime smoke
+        run: npm run cf:smoke

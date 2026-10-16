@@ -38,5 +38,15 @@ jobs:
       - run: npx tsc --noEmit
       - name: Build Cloudflare Worker
         run: npm run cf:build
+      - name: Verify Cloudflare runtime before deployment
+        run: npm run cf:smoke
       - name: Deploy reviewed revision
+        id: publish
         run: npx wrangler deploy --var "GITHUB_SHA:$GITHUB_SHA"
+      # Wrangler can publish workers.dev while reporting a custom-domain conflict.
+      # Check the published revision without suppressing that deployment failure.
+      - name: Verify published Worker
+        if: ${{ !cancelled() && (steps.publish.outcome == 'success' || steps.publish.outcome == 'failure') }}
+        env:
+          CLOUDFLARE_SMOKE_URL: https://aivideo.victoryonline1.workers.dev
+        run: npm run cf:smoke

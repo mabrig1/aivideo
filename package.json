@@ -8,29 +8,30 @@
     "start": "next start",
     "lint": "eslint app lib test --max-warnings=0",
     "cf:build": "opennextjs-cloudflare build",
+    "cf:smoke": "node scripts/cloudflare-smoke.mjs",
     "cf:preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
     "deploy": "opennextjs-cloudflare build && wrangler deploy",
     "cf:typegen": "wrangler types --env-interface CloudflareEnv cloudflare-env.d.ts",
     "test": "node --import tsx --test test/*.test.ts"
   },
   "dependencies": {
-    "@opennextjs/cloudflare": "latest",
+    "@aws-sdk/client-s3": "^3.800.0",
+    "@aws-sdk/s3-request-presigner": "^3.800.0",
+    "@opennextjs/cloudflare": "1.20.12",
     "@types/node": "latest",
     "@types/react": "latest",
     "@types/react-dom": "latest",
-    "next": "latest",
+    "ioredis": "^5.4.1",
+    "mongodb": "^6.16.0",
+    "next": "16.4.1",
     "react": "latest",
     "react-dom": "latest",
-    "typescript": "latest",
-    "@aws-sdk/client-s3": "^3.800.0",
-    "@aws-sdk/s3-request-presigner": "^3.800.0",
-    "ioredis": "^5.4.1",
-    "mongodb": "^6.16.0"
+    "typescript": "latest"
   },
   "devDependencies": {
-    "wrangler": "latest",
-    "tsx": "^4.20.0",
     "eslint": "^9.39.0",
-    "eslint-config-next": "16.4.0"
+    "eslint-config-next": "16.4.1",
+    "tsx": "^4.20.0",
+    "wrangler": "latest"
   }
 }
