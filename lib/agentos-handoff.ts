@@ -24,11 +24,11 @@ const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 let clientPromise:Promise<MongoClient>|null=null;
 
 type HandoffSettings={AGENTOS_HANDOFF_ENABLED?:string;AGENTOS_HANDOFF_TOKEN?:string;MONGODB_URI?:string};
-export function handoffEnabled(env:HandoffSettings=process.env):boolean {
+export function handoffEnabled(env:HandoffSettings=(process.env as unknown as HandoffSettings)):boolean {
   return env.AGENTOS_HANDOFF_ENABLED==='true' &&
     Boolean(env.AGENTOS_HANDOFF_TOKEN && env.AGENTOS_HANDOFF_TOKEN.length>=32 && env.MONGODB_URI);
 }
-export function handoffAuthorized(header:string|null,env:HandoffSettings=process.env):boolean {
+export function handoffAuthorized(header:string|null,env:HandoffSettings=(process.env as unknown as HandoffSettings)):boolean {
   if(!handoffEnabled(env))return false;
   const secret=Buffer.from('Bearer '+env.AGENTOS_HANDOFF_TOKEN);
   const supplied=Buffer.from(header||'');
