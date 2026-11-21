@@ -15,6 +15,7 @@ export type RenderJobRecord={
  state:'queued'|'generating'|'rendering'|'qc'|'ready'|'failed';
  source:{name:string;path:string;size:number;mime:string};
  scenes?:{name:string;path:string;size:number;mime:string}[];
+ pexelsCredits?:{videoId:number;author:string;pageUrl:string}[];
  renderMode?:'scene-master'|'wan-scene-master'|'audio-proof';
  wanPrompts?:string[];
  wanSeconds?:number;
