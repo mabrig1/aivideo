@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from pymongo import MongoClient
 from redis import Redis
 from scene_master import assemble_scene_master
+from wan_bridge import generate_wan_scenes
 
 app=FastAPI(title='Mabrig Verse Render Worker',version='0.2.0')
 MONGO=os.getenv('MONGODB_URI','')
@@ -45,8 +46,23 @@ def render(job_id):
     outdir.mkdir(parents=True,exist_ok=True)
     output=outdir/'master.mp4'
     try:
+        wan_prompts=job.get('wanPrompts') or []
+        if wan_prompts:
+            jobs.update_one({'id':job_id},{'$set':{'state':'generating'}})
+            event(job_id,'Explicitly approved private Wan generation started.')
+            def progress(index,state,gpu_id=None):
+                fields={'wanProgress':{'index':index,'state':state}}
+                if gpu_id:
+                    fields['wanProgress']['gpuJobId']=gpu_id
+                jobs.update_one({'id':job_id},{'$set':fields})
+            generated=generate_wan_scenes(job_id,wan_prompts,source.parent,job.get('ratio','16:9'),job.get('wanSeconds',5),progress)
+            jobs.update_one({'id':job_id},{'$set':{'scenes':[
+                {'path':str(file),'name':file.name,'size':file.stat().st_size,'mime':'video/mp4'}
+                for file in generated]}})
+            job['scenes']=[{'path':str(file)} for file in generated]
+            event(job_id,f'{len(generated)} motion-checked Wan scenes saved privately.')
         jobs.update_one({'id':job_id},{'$set':{'state':'rendering'}})
-        event(job_id,'FFmpeg worker claimed the Redis job.')
+        event(job_id,'FFmpeg worker claimed the scene master job.')
         ratio=job.get('ratio','16:9')
         size={'16:9':'1920x1080','9:16':'1080x1920','1:1':'1080x1080','4:5':'1080x1350','2.39:1':'1912x800'}[ratio]
         if job.get('scenes'):
@@ -64,6 +80,9 @@ def render(job_id):
         event(job_id,'Render completed; ffprobe QC started.')
         qc=probe(output)
         qc.update(details)
+        if wan_prompts:
+            qc['mode']='wan-scene-master'
+            qc['generatedSceneCount']=len(wan_prompts)
         if not qc['passed']:
             raise RuntimeError('QC failed: '+','.join(qc['checks']))
         stat=output.stat()
@@ -71,7 +90,7 @@ def render(job_id):
             'state':'ready','qc':qc,
             'output':{'path':str(output),'fileName':f'{job_id}-master.mp4','bytes':stat.st_size,'downloadUrl':f'/api/render/{job_id}/download'}
         }})
-        event(job_id,'QC passed. '+('Footage master' if job.get('scenes') else 'Audio-only black-background proof')+' is ready for download.')
+        event(job_id,'QC passed. '+('Wan-generated footage master' if wan_prompts else 'Footage master' if job.get('scenes') else 'Audio-only black-background proof')+' is ready for download.')
     except Exception as exc:
         jobs.update_one({'id':job_id},{'$set':{'state':'failed','error':str(exc)}})
         event(job_id,f'Render failed: {exc}')
