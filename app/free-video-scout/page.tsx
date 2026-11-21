@@ -1,5 +1,5 @@
 'use client';
-import {useEffect,useState} from 'react';
+import {useCallback,useEffect,useState} from 'react';
 import Link from 'next/link';
 
 type Provider={
@@ -17,7 +17,7 @@ export default function FreeVideoScoutPage(){
  const [scout,setScout]=useState<Scout|null>(null);
  const [error,setError]=useState('');
  const [busy,setBusy]=useState(false);
- async function refresh(){
+ const refresh=useCallback(async ()=>{
   setBusy(true);setError('');
   try{
    const results=await Promise.all([
@@ -29,8 +29,8 @@ export default function FreeVideoScoutPage(){
    setScout(await results[1].json());
   }catch(exc){setError(exc instanceof Error?exc.message:'Unable to read provider data');}
   finally{setBusy(false);}
- }
- useEffect(()=>{void refresh();},[]);
+ },[]);
+ useEffect(()=>{void refresh();},[refresh]);
  const recommended=scout?.candidates.filter(c=>c.apiIntegration==='review-required')||[];
  return <main style={{maxWidth:960,margin:'2rem auto',padding:'1.25rem',lineHeight:1.6}}>
   <Link href="/">← AI Video home</Link>
