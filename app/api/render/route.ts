@@ -1,6 +1,6 @@
 import {renderAccessStatus} from '../../../lib/render-access';
 import {NextRequest,NextResponse} from 'next/server';
-import {mkdir,writeFile} from 'node:fs/promises';
+import {mkdir,writeFile,rm} from 'node:fs/promises';
 import path from 'node:path';
 import {enqueueRender,jobsCollection,newId,now,type RenderJobRecord} from '../../../lib/production-runtime';
 import {downloadFreeScene,validatedFreeSceneIds} from '../../../lib/free-footage';
@@ -11,6 +11,7 @@ export const dynamic='force-dynamic';
 const allowed=new Set(['audio/mpeg','audio/wav','audio/x-wav','audio/flac','audio/mp4','audio/aac','audio/ogg']);
 
 export async function POST(req:NextRequest){
+ let cleanOnFailure:string|null=null;
  const denied=renderAccessStatus(req.headers);
  if(denied)return NextResponse.json({error:denied===401?'Operator authorization required.':'Local render proof is disabled or not configured.'},{status:denied});
  try{
@@ -67,6 +68,7 @@ export async function POST(req:NextRequest){
   const root=process.env.LOCAL_MEDIA_ROOT||'/tmp/mabrigverse-media';
   const jobDir=path.join(/* turbopackIgnore: true */ root,id);
   await mkdir(jobDir,{recursive:true});
+  cleanOnFailure=jobDir;
   const safeName=(audio.name||'source-audio').replace(/[^a-zA-Z0-9._-]+/g,'_');
   const sourcePath=path.join(jobDir,'source_'+safeName);
   await writeFile(sourcePath,Buffer.from(await audio.arrayBuffer()));
@@ -81,7 +83,7 @@ export async function POST(req:NextRequest){
   let stockBytes=0;
   for(const [index,pexelsId] of pexelsIds.entries()){
    const remaining=400*1024*1024-audio.size-sceneBytes-stockBytes;
-   if(remaining<1024)return NextResponse.json({error:'Total media budget exhausted'},{status:413});
+   if(remaining<1024)throw new Error('Total media budget exhausted');
    const scenePath=path.join(jobDir,`pexels_${index}_${pexelsId}.mp4`);
    const fetched=await downloadFreeScene(pexelsId,scenePath,process.env.PEXELS_API_KEY,Math.min(120*1024*1024,remaining));
    stockBytes+=fetched.bytes;
@@ -92,8 +94,10 @@ export async function POST(req:NextRequest){
   const job:RenderJobRecord={id,createdAt:stamp,updatedAt:stamp,state:'queued',source:{name:safeName,path:sourcePath,size:audio.size,mime:audio.type||'application/octet-stream'},brief,ratio,scenes,pexelsCredits,wanPrompts,wanSeconds,renderMode:wanPrompts.length?'wan-scene-master':scenes.length?'scene-master':'audio-proof',events:[{at:stamp,message:'Audio uploaded to durable local media volume.'},{at:stamp,message:wanPrompts.length?`${wanPrompts.length} Wan scene prompts queued for approved private GPU generation.`:pexelsIds.length?`${pexelsIds.length} Pexels licensed clips downloaded into private scene folder.`:scenes.length?`${scenes.length} genuine video clips queued for mastering.`:'Audio-only proof queued; output will have black visuals.'}]};
   await (await jobsCollection()).insertOne(job);
   await enqueueRender(id);
+  cleanOnFailure=null;
   return NextResponse.json({id,state:'queued',statusUrl:`/api/render/${id}`,message:wanPrompts.length?'Private Wan generation and subsequent footage mastering queued.':pexelsIds.length?'Licensed footage and soundtrack queued for free FFmpeg mastering.':scenes.length?'Genuine footage master queued.':'Audio-only placeholder proof queued (black visuals).'},{status:202});
  }catch(error){
+  if(cleanOnFailure)await rm(cleanOnFailure,{recursive:true,force:true}).catch(()=>{});
   return NextResponse.json({error:error instanceof Error?error.message:'Unable to queue render'},{status:500});
  }
 }
