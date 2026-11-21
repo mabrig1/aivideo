@@ -66,6 +66,9 @@ jobs:
           npm ci --no-audit --no-fund
           pip install -r worker/requirements.txt
 
+      - name: Verify genuine-frame scene mastering
+        run: python -m unittest discover -s worker -p 'test_scene_master.py' -v
+
       - name: Build Next app
         run: npm run build
 
