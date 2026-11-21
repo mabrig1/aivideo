@@ -1,8 +1,9 @@
 import {renderAccessStatus} from '../../../lib/render-access';
 import {NextRequest,NextResponse} from 'next/server';
-import {mkdir,writeFile} from 'node:fs/promises';
+import {mkdir,writeFile,rm} from 'node:fs/promises';
 import path from 'node:path';
 import {enqueueRender,jobsCollection,newId,now,type RenderJobRecord} from '../../../lib/production-runtime';
+import {downloadFreeScene,validatedFreeSceneIds} from '../../../lib/free-footage';
 
 export const runtime='nodejs';
 export const dynamic='force-dynamic';
@@ -10,6 +11,7 @@ export const dynamic='force-dynamic';
 const allowed=new Set(['audio/mpeg','audio/wav','audio/x-wav','audio/flac','audio/mp4','audio/aac','audio/ogg']);
 
 export async function POST(req:NextRequest){
+ let cleanOnFailure:string|null=null;
  const denied=renderAccessStatus(req.headers);
  if(denied)return NextResponse.json({error:denied===401?'Operator authorization required.':'Local render proof is disabled or not configured.'},{status:denied});
  try{
@@ -22,6 +24,16 @@ export async function POST(req:NextRequest){
   const ratio=String(form.get('ratio')||'16:9');
   if(!(audio instanceof File))return NextResponse.json({error:'audio file is required'},{status:400});
   const sceneUploads=form.getAll('clips');
+  const pexelsRaw=form.get('pexelsIds');
+  let pexelsIds:number[]=[];
+  if(pexelsRaw!==null){
+   if(typeof pexelsRaw!=='string'||pexelsRaw.length>120)return NextResponse.json({error:'Invalid free-footage selection'},{status:400});
+   try{pexelsIds=validatedFreeSceneIds(JSON.parse(pexelsRaw));}
+   catch{return NextResponse.json({error:'Select 1–8 distinct valid Pexels video IDs'},{status:400});}
+   if(sceneUploads.length)return NextResponse.json({error:'Choose uploaded clips OR Pexels clips, not both'},{status:400});
+   if(form.get('rightsConfirmed')!=='yes')return NextResponse.json({error:'Confirm soundtrack rights and source-media license'},{status:403});
+   if(!process.env.PEXELS_API_KEY?.trim())return NextResponse.json({error:'Pexels is not configured; download the clips manually and upload them instead.'},{status:503});
+  }
   const wanRaw=form.get('wanPrompts');
   let wanPrompts:string[]=[];
   let wanSeconds=5;
@@ -33,7 +45,7 @@ export async function POST(req:NextRequest){
    wanPrompts=parsed.map((p:string)=>p.trim());
    wanSeconds=Number(form.get('wanSeconds')||5);
    if(!Number.isFinite(wanSeconds)||wanSeconds<1||wanSeconds>8)return NextResponse.json({error:'Wan duration must be 1–8 seconds'},{status:400});
-   if(sceneUploads.length)return NextResponse.json({error:'Choose uploaded clips OR Wan scenes, not both'},{status:400});
+   if(sceneUploads.length||pexelsIds.length)return NextResponse.json({error:'Choose uploaded clips OR Pexels clips OR Wan scenes'},{status:400});
    if(!['16:9','9:16','1:1'].includes(ratio))return NextResponse.json({error:'Wan only supports 16:9, 9:16 or 1:1'},{status:400});
    if(process.env.WAN_BRIDGE_ENABLED!=='true'||!process.env.WAN_WORKER_URL||!(process.env.GPU_WORKER_TOKEN||'').trim()||process.env.GPU_WORKER_TOKEN!.trim().length<32)return NextResponse.json({error:'Private Wan bridge is not configured or enabled'},{status:503});
    if(form.get('computeApproval')!=='yes'||form.get('rightsConfirmed')!=='yes')return NextResponse.json({error:'Explicit GPU-compute and media rights approval required'},{status:403});
@@ -56,6 +68,7 @@ export async function POST(req:NextRequest){
   const root=process.env.LOCAL_MEDIA_ROOT||'/tmp/mabrigverse-media';
   const jobDir=path.join(/* turbopackIgnore: true */ root,id);
   await mkdir(jobDir,{recursive:true});
+  cleanOnFailure=jobDir;
   const safeName=(audio.name||'source-audio').replace(/[^a-zA-Z0-9._-]+/g,'_');
   const sourcePath=path.join(jobDir,'source_'+safeName);
   await writeFile(sourcePath,Buffer.from(await audio.arrayBuffer()));
@@ -66,12 +79,25 @@ export async function POST(req:NextRequest){
    await writeFile(scenePath,Buffer.from(await clip.arrayBuffer()));
    scenes.push({name:`clip_${index}`,path:scenePath,size:clip.size,mime:clip.type});
   }
+  const pexelsCredits:NonNullable<RenderJobRecord['pexelsCredits']>=[];
+  let stockBytes=0;
+  for(const [index,pexelsId] of pexelsIds.entries()){
+   const remaining=400*1024*1024-audio.size-sceneBytes-stockBytes;
+   if(remaining<1024)throw new Error('Total media budget exhausted');
+   const scenePath=path.join(jobDir,`pexels_${index}_${pexelsId}.mp4`);
+   const fetched=await downloadFreeScene(pexelsId,scenePath,process.env.PEXELS_API_KEY,Math.min(120*1024*1024,remaining));
+   stockBytes+=fetched.bytes;
+   scenes.push({name:`pexels_${pexelsId}`,path:scenePath,size:fetched.bytes,mime:'video/mp4'});
+   pexelsCredits.push({videoId:pexelsId,author:fetched.scene.author,pageUrl:fetched.scene.pageUrl});
+  }
   const stamp=now();
-  const job:RenderJobRecord={id,createdAt:stamp,updatedAt:stamp,state:'queued',source:{name:safeName,path:sourcePath,size:audio.size,mime:audio.type||'application/octet-stream'},brief,ratio,scenes,wanPrompts,wanSeconds,renderMode:wanPrompts.length?'wan-scene-master':scenes.length?'scene-master':'audio-proof',events:[{at:stamp,message:'Audio uploaded to durable local media volume.'},{at:stamp,message:wanPrompts.length?`${wanPrompts.length} Wan scene prompts queued for approved private GPU generation.`:scenes.length?`${scenes.length} genuine video clips queued for mastering.`:'Audio-only proof queued; output will have black visuals.'}]};
+  const job:RenderJobRecord={id,createdAt:stamp,updatedAt:stamp,state:'queued',source:{name:safeName,path:sourcePath,size:audio.size,mime:audio.type||'application/octet-stream'},brief,ratio,scenes,pexelsCredits,wanPrompts,wanSeconds,renderMode:wanPrompts.length?'wan-scene-master':scenes.length?'scene-master':'audio-proof',events:[{at:stamp,message:'Audio uploaded to durable local media volume.'},{at:stamp,message:wanPrompts.length?`${wanPrompts.length} Wan scene prompts queued for approved private GPU generation.`:pexelsIds.length?`${pexelsIds.length} Pexels licensed clips downloaded into private scene folder.`:scenes.length?`${scenes.length} genuine video clips queued for mastering.`:'Audio-only proof queued; output will have black visuals.'}]};
   await (await jobsCollection()).insertOne(job);
   await enqueueRender(id);
-  return NextResponse.json({id,state:'queued',statusUrl:`/api/render/${id}`,message:wanPrompts.length?'Private Wan generation and subsequent footage mastering queued.':scenes.length?'Genuine footage master queued.':'Audio-only placeholder proof queued (black visuals).'},{status:202});
+  cleanOnFailure=null;
+  return NextResponse.json({id,state:'queued',statusUrl:`/api/render/${id}`,message:wanPrompts.length?'Private Wan generation and subsequent footage mastering queued.':pexelsIds.length?'Licensed footage and soundtrack queued for free FFmpeg mastering.':scenes.length?'Genuine footage master queued.':'Audio-only placeholder proof queued (black visuals).'},{status:202});
  }catch(error){
+  if(cleanOnFailure)await rm(cleanOnFailure,{recursive:true,force:true}).catch(()=>{});
   return NextResponse.json({error:error instanceof Error?error.message:'Unable to queue render'},{status:500});
  }
 }
