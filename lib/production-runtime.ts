@@ -14,6 +14,8 @@ export type RenderJobRecord={
  updatedAt:string;
  state:'queued'|'rendering'|'qc'|'ready'|'failed';
  source:{name:string;path:string;size:number;mime:string};
+ scenes?:{name:string;path:string;size:number;mime:string}[];
+ renderMode?:'scene-master'|'audio-proof';
  brief:string;
  ratio:string;
  output?:{path:string;fileName:string;bytes:number;downloadUrl:string};

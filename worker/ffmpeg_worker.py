@@ -3,6 +3,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from pymongo import MongoClient
 from redis import Redis
+from scene_master import assemble_scene_master
 
 app=FastAPI(title='Mabrig Verse Render Worker',version='0.2.0')
 MONGO=os.getenv('MONGODB_URI','')
@@ -48,15 +49,21 @@ def render(job_id):
         event(job_id,'FFmpeg worker claimed the Redis job.')
         ratio=job.get('ratio','16:9')
         size={'16:9':'1920x1080','9:16':'1080x1920','1:1':'1080x1080','4:5':'1080x1350','2.39:1':'1912x800'}[ratio]
-        cmd=[
+        if job.get('scenes'):
+            details=assemble_scene_master(source,[scene['path'] for scene in job['scenes']],output,outdir,ratio)
+        else:
+            details={'mode':'audio-proof','sceneCount':0}
+        if not job.get('scenes'):
+            cmd=[
             'ffmpeg','-y','-f','lavfi','-i',f'color=c=black:s={size}:r=30',
             '-i',str(source),'-shortest','-c:v','libx264','-preset','veryfast','-pix_fmt','yuv420p',
             '-c:a','aac','-b:a','192k','-movflags','+faststart',str(output)
         ]
-        subprocess.run(cmd,timeout=900,check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,text=True)
+            subprocess.run(cmd,timeout=900,check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,text=True)
         jobs.update_one({'id':job_id},{'$set':{'state':'qc'}})
         event(job_id,'Render completed; ffprobe QC started.')
         qc=probe(output)
+        qc.update(details)
         if not qc['passed']:
             raise RuntimeError('QC failed: '+','.join(qc['checks']))
         stat=output.stat()
@@ -64,7 +71,7 @@ def render(job_id):
             'state':'ready','qc':qc,
             'output':{'path':str(output),'fileName':f'{job_id}-master.mp4','bytes':stat.st_size,'downloadUrl':f'/api/render/{job_id}/download'}
         }})
-        event(job_id,'QC passed. Downloadable master is ready.')
+        event(job_id,'QC passed. '+('Footage master' if job.get('scenes') else 'Audio-only black-background proof')+' is ready for download.')
     except Exception as exc:
         jobs.update_one({'id':job_id},{'$set':{'state':'failed','error':str(exc)}})
         event(job_id,f'Render failed: {exc}')
