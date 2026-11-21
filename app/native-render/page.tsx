@@ -1,5 +1,6 @@
 'use client';
 import {useState, type FormEvent} from 'react';
+import Link from 'next/link';
 
 type JobStatus = {
   id: string;
@@ -67,7 +68,7 @@ export default function NativeRenderPage() {
     finally {setBusy(false);}
   }
   return <main style={{maxWidth:760,margin:'3rem auto',padding:'1.5rem',lineHeight:1.6}}>
-    <a href="/">← Back to AI Video</a>
+    <Link href="/">← Back to AI Video</Link>
     <h1>Native Video Master Studio</h1>
     <p>Combine up to eight genuine video clips with your soundtrack into a downloadable H.264/AAC MP4. The FFmpeg worker loops your visual sequence to cover the song duration; it does not invent frames, create lip-sync, or charge a video provider.</p>
     <p><strong>Local operator-only preview.</strong> Requires the separate FFmpeg render worker, local shared storage, MongoDB, Redis and an enabled operator token. It is unavailable on Cloudflare by default.</p>
