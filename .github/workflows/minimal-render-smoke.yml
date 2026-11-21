@@ -5,6 +5,10 @@ on:
     paths:
       - 'app/api/render/**'
       - 'lib/production-runtime.ts'
+      - 'lib/free-footage.ts'
+      - 'app/api/free-footage/**'
+      - 'app/native-render/**'
+      - 'test/free-footage.test.ts'
       - 'worker/**'
       - 'package.json'
       - '.github/workflows/minimal-render-smoke.yml'
@@ -67,6 +71,9 @@ jobs:
           sudo apt-get install -y ffmpeg jq
           npm ci --no-audit --no-fund
           pip install -r worker/requirements.txt
+
+      - name: Verify free-footage security and download tests
+        run: npm test
 
       - name: Verify genuine-frame scene mastering
         run: python -m unittest discover -s worker -p 'test_scene_master.py' -v
