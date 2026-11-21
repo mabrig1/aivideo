@@ -68,7 +68,7 @@ test('downloads verified video ID to a bounded private MP4, not a user URL', asy
       }
       assert.equal(String(input),pexelsMedia.video_files[0].link);
       assert.equal(init?.redirect,'error');
-      return new Response(expected,{status:200,headers:{'Content-Type':'video/mp4'}});
+      return new Response(new Uint8Array(Array.from(expected)),{status:200,headers:{'Content-Type':'video/mp4'}});
     }) as typeof fetch;
     const output=join(folder,'clip.mp4');
     const result=await downloadFreeScene(123456,output,'not-a-real-pexels-key',3000,stub);
