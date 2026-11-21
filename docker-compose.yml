@@ -25,6 +25,7 @@ services:
       STORAGE_DRIVER: local
       LOCAL_RENDER_ENABLED: "true"
       RENDER_TOKEN: ${RENDER_TOKEN:?Set a random token of at least 32 characters}
+      PEXELS_API_KEY: ${PEXELS_API_KEY:-}
       WAN_BRIDGE_ENABLED: ${WAN_BRIDGE_ENABLED:-false}
       WAN_WORKER_URL: ${WAN_WORKER_URL:-http://wan:8080}
       GPU_WORKER_TOKEN: ${GPU_WORKER_TOKEN:-}
