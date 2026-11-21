@@ -1,0 +1,37 @@
+name: Free video model scout
+
+on:
+  schedule:
+    # New model metadata daily; no GPU execution or account API secrets.
+    - cron: '15 7 * * *'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'scripts/free_video_model_scout.py'
+      - 'scripts/test_free_video_model_scout.py'
+      - '.github/workflows/free-video-model-scout.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  model-scout:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate fail-closed model metadata parser
+        run: python -m unittest discover -s scripts -p 'test_free_video_model_scout.py' -v
+      - name: Retrieve current official model metadata (scheduled/manual only)
+        if: github.event_name != 'pull_request'
+        run: python scripts/free_video_model_scout.py --output scout-results/video-model-candidates.json
+      - name: Publish review-only candidate report
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: video-model-candidates
+          path: scout-results/video-model-candidates.json
+          retention-days: 30
