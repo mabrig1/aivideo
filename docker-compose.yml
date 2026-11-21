@@ -25,6 +25,9 @@ services:
       STORAGE_DRIVER: local
       LOCAL_RENDER_ENABLED: "true"
       RENDER_TOKEN: ${RENDER_TOKEN:?Set a random token of at least 32 characters}
+      WAN_BRIDGE_ENABLED: ${WAN_BRIDGE_ENABLED:-false}
+      WAN_WORKER_URL: ${WAN_WORKER_URL:-http://wan:8080}
+      GPU_WORKER_TOKEN: ${GPU_WORKER_TOKEN:-}
     ports:
       - "3000:3000"
     volumes:
@@ -45,7 +48,9 @@ services:
       STORAGE_DRIVER: local
       LOCAL_RENDER_ENABLED: "true"
       RENDER_TOKEN: ${RENDER_TOKEN:?Set a random token of at least 32 characters}
-      GPU_WORKER_TOKEN: local-dev-worker
+      GPU_WORKER_TOKEN: ${GPU_WORKER_TOKEN:-}
+      WAN_BRIDGE_ENABLED: ${WAN_BRIDGE_ENABLED:-false}
+      WAN_WORKER_URL: ${WAN_WORKER_URL:-http://wan:8080}
     ports:
       - "8080:8080"
     volumes:
@@ -54,7 +59,31 @@ services:
       - mongo
       - redis
 
+  # GPU service remains opt-in; use --profile gpu and explicit operator tokens.
+  # WAN model downloads and GPU usage consume compute even without API billing.
+  wan:
+    profiles: ["gpu"]
+    build:
+      context: ./worker
+      dockerfile: Dockerfile.wan
+    restart: unless-stopped
+    environment:
+      GPU_WORKER_TOKEN: ${GPU_WORKER_TOKEN:-}
+      GPU_WORKER_PUBLIC_URL: http://wan:8080
+      VIDEO_OUTPUT_DIR: /data/outputs
+    volumes:
+      - wan-data:/data/outputs
+      - wan-models:/models/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              capabilities: [gpu]
+
 volumes:
   mongo-data:
   redis-data:
   media-data:
+  wan-data:
+  wan-models:
