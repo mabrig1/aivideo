@@ -1,0 +1,70 @@
+name: Free video model scout (review only)
+
+on:
+  schedule:
+    - cron: '23 7 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  scan-public-checkpoints:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Discover newly created public video-model checkpoints
+        run: |
+          python scripts/free-video-scout.py > /tmp/free-video-candidates.json
+          python -m json.tool /tmp/free-video-candidates.json >/dev/null
+          python - <<'PY'
+          import json
+          obj=json.load(open('/tmp/free-video-candidates.json'))
+          print('Recent unverified model-card leads:',len(obj['models']))
+          PY
+      - name: Upload discovery evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: free-video-candidates
+          path: /tmp/free-video-candidates.json
+          retention-days: 14
+      - name: File bounded, deduplicated review-only issues
+        uses: actions/github-script@v7
+        env:
+          CANDIDATE_PATH: /tmp/free-video-candidates.json
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs=require('fs');
+            const data=JSON.parse(fs.readFileSync(process.env.CANDIDATE_PATH,'utf8'));
+            const {owner,repo}=context.repo;
+            const existing=await github.paginate(github.rest.issues.listForRepo,{
+              owner,repo,state:'all',per_page:100
+            });
+            let opened=0;
+            for(const candidate of data.models){
+              if(opened>=3)break;
+              const title='[Scout] Review video model '+candidate.id;
+              if(existing.some(issue=>issue.title===title))continue;
+              const body=[
+                'Discovered in the official public Hugging Face model catalog.',
+                '',
+                'Model: '+candidate.url,
+                'Created: '+candidate.createdAt,
+                '',
+                '**Not verified:** Free monthly hosted inference credits, API availability,',
+                'commercial-use license, performance, GPU hardware costs, watermark, safety.',
+                '',
+                '**Do not auto-enable or spend money.** An operator must verify official',
+                'model docs, checkpoint licensing, compatibility, and balances first.',
+                'Integration remains a separate manually reviewed PR.'
+              ].join('\n');
+              await github.rest.issues.create({owner,repo,title,body});
+              opened++;
+            }
+            core.info('Opened '+opened+' review-only candidate issues.');
