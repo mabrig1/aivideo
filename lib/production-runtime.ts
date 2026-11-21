@@ -12,10 +12,13 @@ export type RenderJobRecord={
  id:string;
  createdAt:string;
  updatedAt:string;
- state:'queued'|'rendering'|'qc'|'ready'|'failed';
+ state:'queued'|'generating'|'rendering'|'qc'|'ready'|'failed';
  source:{name:string;path:string;size:number;mime:string};
  scenes?:{name:string;path:string;size:number;mime:string}[];
- renderMode?:'scene-master'|'audio-proof';
+ renderMode?:'scene-master'|'wan-scene-master'|'audio-proof';
+ wanPrompts?:string[];
+ wanSeconds?:number;
+ wanProgress?:{index:number;state:string;gpuJobId?:string};
  brief:string;
  ratio:string;
  output?:{path:string;fileName:string;bytes:number;downloadUrl:string};

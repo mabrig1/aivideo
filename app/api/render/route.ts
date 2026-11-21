@@ -22,6 +22,22 @@ export async function POST(req:NextRequest){
   const ratio=String(form.get('ratio')||'16:9');
   if(!(audio instanceof File))return NextResponse.json({error:'audio file is required'},{status:400});
   const sceneUploads=form.getAll('clips');
+  const wanRaw=form.get('wanPrompts');
+  let wanPrompts:string[]=[];
+  let wanSeconds=5;
+  if(wanRaw!==null){
+   if(typeof wanRaw!=='string'||wanRaw.length>5500)return NextResponse.json({error:'Invalid or oversized Wan scene manifest'},{status:400});
+   let parsed:unknown;
+   try{parsed=JSON.parse(wanRaw);}catch{return NextResponse.json({error:'Wan prompts must be a JSON array'},{status:400});}
+   if(!Array.isArray(parsed)||parsed.length<1||parsed.length>4||parsed.some(p=>typeof p!=='string'||p.trim().length<12||p.length>1200))return NextResponse.json({error:'Provide one to four 12–1200 character Wan prompts'},{status:400});
+   wanPrompts=parsed.map((p:string)=>p.trim());
+   wanSeconds=Number(form.get('wanSeconds')||5);
+   if(!Number.isFinite(wanSeconds)||wanSeconds<1||wanSeconds>8)return NextResponse.json({error:'Wan duration must be 1–8 seconds'},{status:400});
+   if(sceneUploads.length)return NextResponse.json({error:'Choose uploaded clips OR Wan scenes, not both'},{status:400});
+   if(!['16:9','9:16','1:1'].includes(ratio))return NextResponse.json({error:'Wan only supports 16:9, 9:16 or 1:1'},{status:400});
+   if(process.env.WAN_BRIDGE_ENABLED!=='true'||!process.env.WAN_WORKER_URL||!(process.env.GPU_WORKER_TOKEN||'').trim()||process.env.GPU_WORKER_TOKEN!.trim().length<32)return NextResponse.json({error:'Private Wan bridge is not configured or enabled'},{status:503});
+   if(form.get('computeApproval')!=='yes'||form.get('rightsConfirmed')!=='yes')return NextResponse.json({error:'Explicit GPU-compute and media rights approval required'},{status:403});
+  }
   if(sceneUploads.length>8)return NextResponse.json({error:'Maximum eight video clips per render'},{status:413});
   if(sceneUploads.length && form.get('rightsConfirmed')!=='yes')return NextResponse.json({error:'Confirm rights to all submitted video clips'},{status:400});
   const videoTypes:Record<string,string>={'video/mp4':'mp4','video/webm':'webm','video/quicktime':'mov','video/x-matroska':'mkv'};
@@ -51,10 +67,10 @@ export async function POST(req:NextRequest){
    scenes.push({name:`clip_${index}`,path:scenePath,size:clip.size,mime:clip.type});
   }
   const stamp=now();
-  const job:RenderJobRecord={id,createdAt:stamp,updatedAt:stamp,state:'queued',source:{name:safeName,path:sourcePath,size:audio.size,mime:audio.type||'application/octet-stream'},brief,ratio,scenes,renderMode:scenes.length?'scene-master':'audio-proof',events:[{at:stamp,message:'Audio uploaded to durable local media volume.'},{at:stamp,message:scenes.length?`${scenes.length} genuine video clips queued for mastering.`:'Audio-only proof queued; output will have black visuals.'}]};
+  const job:RenderJobRecord={id,createdAt:stamp,updatedAt:stamp,state:'queued',source:{name:safeName,path:sourcePath,size:audio.size,mime:audio.type||'application/octet-stream'},brief,ratio,scenes,wanPrompts,wanSeconds,renderMode:wanPrompts.length?'wan-scene-master':scenes.length?'scene-master':'audio-proof',events:[{at:stamp,message:'Audio uploaded to durable local media volume.'},{at:stamp,message:wanPrompts.length?`${wanPrompts.length} Wan scene prompts queued for approved private GPU generation.`:scenes.length?`${scenes.length} genuine video clips queued for mastering.`:'Audio-only proof queued; output will have black visuals.'}]};
   await (await jobsCollection()).insertOne(job);
   await enqueueRender(id);
-  return NextResponse.json({id,state:'queued',statusUrl:`/api/render/${id}`,message:scenes.length?'Genuine footage master queued.':'Audio-only placeholder proof queued (black visuals).'},{status:202});
+  return NextResponse.json({id,state:'queued',statusUrl:`/api/render/${id}`,message:wanPrompts.length?'Private Wan generation and subsequent footage mastering queued.':scenes.length?'Genuine footage master queued.':'Audio-only placeholder proof queued (black visuals).'},{status:202});
  }catch(error){
   return NextResponse.json({error:error instanceof Error?error.message:'Unable to queue render'},{status:500});
  }
