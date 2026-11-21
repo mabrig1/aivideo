@@ -20,6 +20,7 @@ export async function POST(req:NextRequest){
   const audio=form.get('audio');
   const brief=String(form.get('brief')||'Create a clean downloadable music master from this uploaded audio.');
   const ratio=String(form.get('ratio')||'16:9');
+  if(!(audio instanceof File))return NextResponse.json({error:'audio file is required'},{status:400});
   const sceneUploads=form.getAll('clips');
   if(sceneUploads.length>8)return NextResponse.json({error:'Maximum eight video clips per render'},{status:413});
   if(sceneUploads.length && form.get('rightsConfirmed')!=='yes')return NextResponse.json({error:'Confirm rights to all submitted video clips'},{status:400});
@@ -30,7 +31,6 @@ export async function POST(req:NextRequest){
    sceneBytes+=clip.size;
   }
   if(sceneBytes+audio.size>400*1024*1024)return NextResponse.json({error:'Combined upload exceeds 400 MB'},{status:413});
-  if(!(audio instanceof File))return NextResponse.json({error:'audio file is required'},{status:400});
   if(audio.size===0)return NextResponse.json({error:'audio file is empty'},{status:400});
   if(audio.size>250*1024*1024)return NextResponse.json({error:'audio file exceeds 250 MB limit for the local proof path'},{status:413});
   if(audio.type&&!allowed.has(audio.type))return NextResponse.json({error:`unsupported audio type: ${audio.type}`},{status:415});
