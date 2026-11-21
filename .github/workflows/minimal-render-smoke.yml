@@ -45,7 +45,9 @@ jobs:
       RENDER_TOKEN: ci-render-test-token-12345678901234567890
       LOCAL_MEDIA_ROOT: /tmp/mabrigverse-media
       GPU_WORKER_URL: http://127.0.0.1:8080
-      GPU_WORKER_TOKEN: ci-worker
+      GPU_WORKER_TOKEN: ci-wan-gpu-token-12345678901234567890
+      WAN_BRIDGE_ENABLED: "true"
+      WAN_WORKER_URL: http://127.0.0.1:8091
       NEXT_PUBLIC_APP_URL: http://127.0.0.1:3000
 
     steps:
@@ -69,16 +71,20 @@ jobs:
       - name: Verify genuine-frame scene mastering
         run: python -m unittest discover -s worker -p 'test_scene_master.py' -v
 
+      - name: Verify authenticated Wan protocol without GPU
+        run: python -m unittest discover -s worker -p 'test_wan_bridge.py' -v
+
       - name: Build Next app
         run: npm run build
 
       - name: Start worker and app
         run: |
           mkdir -p "$LOCAL_MEDIA_ROOT"
+          python worker/mock_wan_server.py > /tmp/mabrig-mock-wan.log 2>&1 &
           python worker/ffmpeg_worker.py > /tmp/mabrig-worker.log 2>&1 &
           npm start > /tmp/mabrig-app.log 2>&1 &
           for i in {1..30}; do
-            if curl -fsS http://127.0.0.1:8080/health >/dev/null && curl -fsS http://127.0.0.1:3000/ >/dev/null; then
+            if curl -fsS -H "Authorization: Bearer $GPU_WORKER_TOKEN" http://127.0.0.1:8091/health >/dev/null && curl -fsS http://127.0.0.1:8080/health >/dev/null && curl -fsS http://127.0.0.1:3000/ >/dev/null; then
               exit 0
             fi
             sleep 2
@@ -132,9 +138,43 @@ jobs:
           test "$AUDIO_CODEC" = "aac"
           ffprobe -v error -show_entries format=duration,size -of json /tmp/master.mp4
 
+      - name: Verify Wan simulated generation through API and real MP4 master
+        run: |
+          RESPONSE=$(curl -fsS -H "Authorization: Bearer $RENDER_TOKEN" \
+            -F 'audio=@/tmp/test-tone.wav;type=audio/wav' \
+            -F 'ratio=16:9' \
+            -F 'wanPrompts=["Cinematic city skyline with constantly moving clouds and passing traffic"]' \
+            -F 'wanSeconds=3' \
+            -F 'computeApproval=yes' \
+            -F 'rightsConfirmed=yes' \
+            http://127.0.0.1:3000/api/render)
+          echo "$RESPONSE" | jq -e '.state == "queued"'
+          ID=$(echo "$RESPONSE" | jq -r '.id')
+          for i in {1..80}; do
+            STATUS=$(curl -fsS -H "Authorization: Bearer $RENDER_TOKEN" "http://127.0.0.1:3000/api/render/$ID")
+            STATE=$(echo "$STATUS" | jq -r '.state')
+            if [ "$STATE" = "ready" ]; then
+              echo "$STATUS" | jq -e '.qc.passed == true and .qc.mode == "wan-scene-master" and .qc.generatedSceneCount == 1'
+              curl -fsSL -H "Authorization: Bearer $RENDER_TOKEN" "http://127.0.0.1:3000/api/render/$ID/download" -o /tmp/wan-master.mp4
+              test -s /tmp/wan-master.mp4
+              test "$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of default=nw=1:nk=1 /tmp/wan-master.mp4)" = h264
+              test "$(ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of default=nw=1:nk=1 /tmp/wan-master.mp4)" = aac
+              exit 0
+            fi
+            if [ "$STATE" = "failed" ]; then
+              echo "$STATUS"
+              exit 1
+            fi
+            sleep 2
+          done
+          echo "Wan simulated production deadline exceeded"
+          exit 1
+
       - name: Print logs on failure
         if: failure()
         run: |
+          echo '--- mock wan ---'
+          cat /tmp/mabrig-mock-wan.log || true
           echo '--- worker ---'
           cat /tmp/mabrig-worker.log || true
           echo '--- app ---'
