@@ -225,7 +225,12 @@ export async function downloadFreeScene(
         await reader.cancel();
         throw new Error('Pexels video exceeds the upload budget.');
       }
-      await handle.write(value);
+      let offset = 0;
+      while (offset < value.byteLength) {
+        const written = await handle.write(value, offset, value.byteLength - offset);
+        if (!written.bytesWritten) throw new Error('Unable to save downloaded footage.');
+        offset += written.bytesWritten;
+      }
     }
     if (total < 1024) throw new Error('Pexels video is empty or incomplete.');
     succeeded = true;
