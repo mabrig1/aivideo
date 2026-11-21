@@ -126,7 +126,7 @@ def generate_wan_scenes(job_id, prompts, job_dir, ratio, seconds=5, progress=Non
         raise BridgeError('Wan GPU model is unavailable or not generation-ready')
 
     outdir = Path(job_dir).resolve()
-    if not outdir.is_dir() or not JOB_ID_PATTERN.match('wan_' + 'a'*32):
+    if not outdir.is_dir() or not re.fullmatch(r'mv_[a-z0-9]+_[a-f0-9]{8}', job_id):
         raise BridgeError('Internal Wan bridge configuration invalid')
     output = []
     for index, prompt in enumerate(prompts):
